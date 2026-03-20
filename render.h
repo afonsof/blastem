@@ -106,6 +106,9 @@ void render_save_screenshot(char *path);
 uint8_t render_saving_video(void);
 void render_end_video(void);
 void render_save_video(char *path);
+uint8_t render_saving_screenshot_sequence(void);
+void render_start_screenshot_sequence(char *path_template);
+void render_end_screenshot_sequence(void);
 uint8_t render_create_window_tex(char *caption, uint32_t width, uint32_t height, uint32_t tex_width, uint32_t tex_height, window_close_handler close_handler);
 uint8_t render_create_window(char *caption, uint32_t width, uint32_t height, window_close_handler close_handler);
 #ifndef DISABLE_OPENGL

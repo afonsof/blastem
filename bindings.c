@@ -38,6 +38,7 @@ typedef enum {
 	UI_RELOAD,
 	UI_SMS_PAUSE,
 	UI_SCREENSHOT,
+	UI_SCREENSHOT_SEQUENCE,
 	UI_RECORD_VIDEO,
 	UI_VGM_LOG,
 	UI_MENU,
@@ -425,6 +426,16 @@ void handle_binding_up(keybinding * binding)
 				render_save_screenshot(path);
 			}
 			break;
+		case UI_SCREENSHOT_SEQUENCE:
+			if (allow_content_binds) {
+				if (render_saving_screenshot_sequence()) {
+					render_end_screenshot_sequence();
+				} else {
+					char *base = get_content_config_path("ui\0screenshot_path\0", "ui\0screenshot_sequence_template\0", "blastem_seq_%Y%m%d_%H%M%S.png");
+					render_start_screenshot_sequence(base);
+				}
+			}
+			break;
 		case UI_RECORD_VIDEO:
 			if (allow_content_binds) {
 				if (render_saving_video()) {
@@ -705,6 +716,8 @@ int parse_binding_target(int device_num, const char * target, tern_node * padbut
 			*subtype_a = UI_SMS_PAUSE;
 		} else if (!strcmp(target + 3, "screenshot")) {
 			*subtype_a = UI_SCREENSHOT;
+		} else if (!strcmp(target + 3, "screenshot_sequence")) {
+			*subtype_a = UI_SCREENSHOT_SEQUENCE;
 		} else if (!strcmp(target + 3, "record_video")) {
 			*subtype_a = UI_RECORD_VIDEO;
 		} else if (!strcmp(target + 3, "vgm_log")) {

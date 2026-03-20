@@ -1709,6 +1709,33 @@ void render_save_screenshot(char *path)
 	screenshot_path = path;
 }
 
+static char *screenshot_sequence_template;
+static uint32_t screenshot_sequence_frame;
+
+uint8_t render_saving_screenshot_sequence(void)
+{
+	return screenshot_sequence_template != NULL;
+}
+
+void render_start_screenshot_sequence(char *path_template)
+{
+	if (screenshot_sequence_template) {
+		free(screenshot_sequence_template);
+	}
+	screenshot_sequence_template = path_template;
+	screenshot_sequence_frame = 0;
+	printf("Starting screenshot sequence with template %s\n", path_template);
+}
+
+void render_end_screenshot_sequence(void)
+{
+	if (screenshot_sequence_template) {
+		printf("Ending screenshot sequence after %u frames\n", screenshot_sequence_frame);
+		free(screenshot_sequence_template);
+		screenshot_sequence_template = NULL;
+	}
+}
+
 #ifndef DISABLE_ZLIB
 static apng_state *apng;
 static FILE *apng_file;
@@ -2230,6 +2257,30 @@ static void process_framebuffer(pixel_t *buffer, uint8_t which, int width)
 			}
 			free(screenshot_path);
 			screenshot_path = NULL;
+		}
+		if (screenshot_sequence_template && which == FRAMEBUFFER_ODD) {
+			char seq_path[4096];
+			char *seq_ext = path_extension(screenshot_sequence_template);
+			if (seq_ext) {
+				// insert frame number before extension: base_XXXXXXXX.ext
+				size_t base_len = strlen(screenshot_sequence_template) - strlen(seq_ext) - 1;
+				char base[4096];
+				memcpy(base, screenshot_sequence_template, base_len);
+				base[base_len] = '\0';
+				snprintf(seq_path, sizeof(seq_path), "%s_%08u.%s", base, screenshot_sequence_frame++, seq_ext);
+				free(seq_ext);
+			} else {
+				snprintf(seq_path, sizeof(seq_path), "%s_%08u", screenshot_sequence_template, screenshot_sequence_frame++);
+			}
+			screenshot_file = fopen(seq_path, "wb");
+			if (screenshot_file) {
+#ifndef DISABLE_ZLIB
+				ext = path_extension(seq_path);
+#endif
+				debug_message("Saving sequence frame to %s\n", seq_path);
+			} else {
+				warning("Failed to open sequence frame file %s for writing\n", seq_path);
+			}
 		}
 		interlaced = last_field != which;
 		buffer += overscan_left[video_standard] + PITCH_PIXEL_T(LINEBUF_SIZE) * overscan_top[video_standard];
