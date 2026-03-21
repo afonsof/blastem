@@ -53,7 +53,8 @@ typedef enum {
 	UI_TOGGLE_LAYER_BGA,
 	UI_TOGGLE_LAYER_BGB,
 	UI_TOGGLE_LAYER_SPRITES,
-	UI_RESET_LAYERS
+	UI_RESET_LAYERS,
+	UI_DUMP_VRAM
 } ui_action;
 
 typedef struct {
@@ -511,6 +512,21 @@ void handle_binding_up(keybinding * binding)
 				render_set_osd_message("All layers: Enabled");
 			}
 			break;
+		case UI_DUMP_VRAM:
+			if (allow_content_binds && current_system->type == SYSTEM_GENESIS) {
+				genesis_context *gen = (genesis_context *)current_system;
+				char *path = get_content_config_path("ui\0screenshot_path\0", "ui\0vram_dump_template\0", "blastem_vram_%Y%m%d_%H%M%S.bin");
+				FILE *f = fopen(path, "wb");
+				if (f) {
+					fwrite(gen->vdp->vdpmem, 1, VRAM_SIZE, f);
+					fclose(f);
+					render_set_osd_message("VRAM dump saved");
+				} else {
+					render_set_osd_message("VRAM dump FAILED");
+				}
+				free(path);
+			}
+			break;
 		case UI_TOGGLE_LAYER_BGA:
 		case UI_TOGGLE_LAYER_BGB:
 		case UI_TOGGLE_LAYER_SPRITES:
@@ -777,6 +793,8 @@ int parse_binding_target(int device_num, const char * target, tern_node * padbut
 			*subtype_a = UI_TOGGLE_LAYER_SPRITES;
 		} else if (!strcmp(target + 3, "reset_layers")) {
 			*subtype_a = UI_RESET_LAYERS;
+		} else if (!strcmp(target + 3, "dump_vram")) {
+			*subtype_a = UI_DUMP_VRAM;
 		} else {
 			warning("Unreconized UI binding type %s\n", target);
 			return 0;
