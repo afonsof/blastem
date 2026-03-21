@@ -1700,6 +1700,76 @@ void render_update_caption(char *title)
 	fps_caption = NULL;
 }
 
+// OSD message system
+#define OSD_CHAR_WIDTH   10
+#define OSD_CHAR_HEIGHT  17
+#define OSD_CHAR_SPACING 11
+#define OSD_PADDING      4
+
+extern unsigned short osd_font[];
+static char osd_message[128];
+static uint32_t osd_display_until;
+
+void render_set_osd_message(const char *text)
+{
+	strncpy(osd_message, text, sizeof(osd_message) - 1);
+	osd_message[sizeof(osd_message) - 1] = '\0';
+	osd_display_until = SDL_GetTicks() + 2000;
+}
+
+static void draw_osd_message(pixel_t *buffer, int width, int height)
+{
+	if (!osd_message[0] || !osd_display_until) return;
+	if (SDL_GetTicks() >= osd_display_until) {
+		osd_message[0] = '\0';
+		return;
+	}
+
+	int pitch = PITCH_PIXEL_T(LINEBUF_SIZE);
+	int msg_len = strlen(osd_message);
+	int box_width  = msg_len * OSD_CHAR_SPACING + OSD_PADDING * 2;
+	int box_height = OSD_CHAR_HEIGHT + OSD_PADDING * 2;
+	int box_x = OSD_PADDING;
+	int box_y = height - box_height - OSD_PADDING;
+
+	if (box_y < 0) box_y = 0;
+	if (box_x + box_width > width) box_width = width - box_x;
+
+	pixel_t bg    = render_map_color(0, 0, 0);
+	pixel_t white = render_map_color(255, 255, 255);
+
+	for (int y = box_y; y < box_y + box_height && y < height; y++) {
+		for (int x = box_x; x < box_x + box_width && x < width; x++) {
+			buffer[y * pitch + x] = bg;
+		}
+	}
+
+	int cx = box_x + OSD_PADDING;
+	int cy = box_y + OSD_PADDING;
+
+	for (int i = 0; i < msg_len; i++) {
+		unsigned char c = (unsigned char)osd_message[i];
+		if (c < '!' || c > '~') {
+			cx += OSD_CHAR_SPACING;
+			continue;
+		}
+		unsigned short *glyph = osd_font + (c - '!') * OSD_CHAR_HEIGHT;
+		for (int row = 0; row < OSD_CHAR_HEIGHT; row++) {
+			int py = cy + row;
+			if (py >= height) break;
+			unsigned short bits = glyph[row];
+			for (int col = 0; col < OSD_CHAR_WIDTH; col++) {
+				int px = cx + col;
+				if (px >= width) break;
+				if (bits & (1 << col)) {
+					buffer[py * pitch + px] = white;
+				}
+			}
+		}
+		cx += OSD_CHAR_SPACING;
+	}
+}
+
 static char *screenshot_path;
 void render_save_screenshot(char *path)
 {
@@ -1711,6 +1781,7 @@ void render_save_screenshot(char *path)
 
 static char *screenshot_sequence_template;
 static uint32_t screenshot_sequence_frame;
+static uint32_t screenshot_sequence_last_ticks;
 
 uint8_t render_saving_screenshot_sequence(void)
 {
@@ -1724,6 +1795,7 @@ void render_start_screenshot_sequence(char *path_template)
 	}
 	screenshot_sequence_template = path_template;
 	screenshot_sequence_frame = 0;
+	screenshot_sequence_last_ticks = 0;
 	printf("Starting screenshot sequence with template %s\n", path_template);
 }
 
@@ -2258,7 +2330,9 @@ static void process_framebuffer(pixel_t *buffer, uint8_t which, int width)
 			free(screenshot_path);
 			screenshot_path = NULL;
 		}
-		if (screenshot_sequence_template && which == FRAMEBUFFER_ODD) {
+		if (screenshot_sequence_template && which == FRAMEBUFFER_ODD
+		    && SDL_GetTicks() - screenshot_sequence_last_ticks >= 1000U / 60U) {
+			screenshot_sequence_last_ticks = SDL_GetTicks();
 			char seq_path[4096];
 			char *seq_ext = path_extension(screenshot_sequence_template);
 			if (seq_ext) {
@@ -2284,6 +2358,7 @@ static void process_framebuffer(pixel_t *buffer, uint8_t which, int width)
 		}
 		interlaced = last_field != which;
 		buffer += overscan_left[video_standard] + PITCH_PIXEL_T(LINEBUF_SIZE) * overscan_top[video_standard];
+		draw_osd_message(buffer, width, height);
 	}
 #ifndef DISABLE_OPENGL
 	if (render_gl && which <= FRAMEBUFFER_EVEN) {

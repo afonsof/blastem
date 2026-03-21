@@ -103,6 +103,7 @@ typedef int (*render_thread_fun)(void*);
 
 pixel_t render_map_color(uint8_t r, uint8_t g, uint8_t b);
 void render_save_screenshot(char *path);
+void render_set_osd_message(const char *text);
 uint8_t render_saving_video(void);
 void render_end_video(void);
 void render_save_video(char *path);

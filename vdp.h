@@ -73,6 +73,10 @@
 
 #define DEBUG_FLAG_PLANE_BORDER 0x01
 
+#define LAYER_DISABLED_BGA     0x01
+#define LAYER_DISABLED_BGB     0x02
+#define LAYER_DISABLED_SPRITES 0x04
+
 #define DISPLAY_ENABLE 0x40
 
 enum {
@@ -269,6 +273,7 @@ struct vdp_context {
 	uint8_t        debug_modes[NUM_DEBUG_TYPES];
 	uint8_t        debug_flags;
 	uint8_t        pushed_frame;
+	uint8_t        layer_disabled; //bit 0 = BGA, bit 1 = BGB, bit 2 = Sprites
 	uint8_t        type;
 	uint8_t        cram_latch;
 	uint8_t        window_h_latch;

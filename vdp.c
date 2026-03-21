@@ -1584,15 +1584,15 @@ static uint8_t composite_normal(vdp_context *context, uint8_t *debug_dst, uint8_
 {
 	uint8_t pixel = bg_index;
 	uint8_t src = DBG_SRC_BG;
-	if (plane_b & 0xF) {
+	if (!(context->layer_disabled & LAYER_DISABLED_BGB) && (plane_b & 0xF)) {
 		pixel = plane_b;
 		src = DBG_SRC_B;
 	}
-	if (plane_a & 0xF && (plane_a & BUF_BIT_PRIORITY) >= (pixel & BUF_BIT_PRIORITY)) {
+	if (!(context->layer_disabled & LAYER_DISABLED_BGA) && (plane_a & 0xF) && (plane_a & BUF_BIT_PRIORITY) >= (pixel & BUF_BIT_PRIORITY)) {
 		pixel = plane_a;
 		src = DBG_SRC_A;
 	}
-	if (sprite & 0xF && (sprite & BUF_BIT_PRIORITY) >= (pixel & BUF_BIT_PRIORITY)) {
+	if (!(context->layer_disabled & LAYER_DISABLED_SPRITES) && (sprite & 0xF) && (sprite & BUF_BIT_PRIORITY) >= (pixel & BUF_BIT_PRIORITY)) {
 		pixel = sprite;
 		src = DBG_SRC_S;
 	}
@@ -1608,17 +1608,17 @@ static sh_pixel composite_highlight(vdp_context *context, uint8_t *debug_dst, ui
 	uint8_t pixel = bg_index;
 	uint8_t src = DBG_SRC_BG;
 	uint8_t intensity = 0;
-	if (plane_b & 0xF) {
+	if (!(context->layer_disabled & LAYER_DISABLED_BGB) && (plane_b & 0xF)) {
 		pixel = plane_b;
 		src = DBG_SRC_B;
 	}
 	intensity = plane_b & BUF_BIT_PRIORITY;
-	if (plane_a & 0xF && (plane_a & BUF_BIT_PRIORITY) >= (pixel & BUF_BIT_PRIORITY)) {
+	if (!(context->layer_disabled & LAYER_DISABLED_BGA) && (plane_a & 0xF) && (plane_a & BUF_BIT_PRIORITY) >= (pixel & BUF_BIT_PRIORITY)) {
 		pixel = plane_a;
 		src = DBG_SRC_A;
 	}
 	intensity |= plane_a & BUF_BIT_PRIORITY;
-	if (sprite & 0xF && (sprite & BUF_BIT_PRIORITY) >= (pixel & BUF_BIT_PRIORITY)) {
+	if (!(context->layer_disabled & LAYER_DISABLED_SPRITES) && (sprite & 0xF) && (sprite & BUF_BIT_PRIORITY) >= (pixel & BUF_BIT_PRIORITY)) {
 		if ((sprite & 0x3F) == 0x3E) {
 			intensity += BUF_BIT_PRIORITY;
 		} else if ((sprite & 0x3F) == 0x3F) {

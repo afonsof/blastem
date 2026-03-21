@@ -49,7 +49,11 @@ typedef enum {
 	UI_COMPOSITE_DEBUG,
 	UI_OSCILLOSCOPE_DEBUG,
 	UI_CD_GRAPHICS_DEBUG,
-	UI_PASTE
+	UI_PASTE,
+	UI_TOGGLE_LAYER_BGA,
+	UI_TOGGLE_LAYER_BGB,
+	UI_TOGGLE_LAYER_SPRITES,
+	UI_RESET_LAYERS
 } ui_action;
 
 typedef struct {
@@ -500,6 +504,31 @@ void handle_binding_up(keybinding * binding)
 				current_system->paste_cur_char = 0;
 			}
 			break;
+		case UI_RESET_LAYERS:
+			if (allow_content_binds && current_system->type == SYSTEM_GENESIS) {
+				genesis_context *gen = (genesis_context *)current_system;
+				gen->vdp->layer_disabled = 0;
+				render_set_osd_message("All layers: Enabled");
+			}
+			break;
+		case UI_TOGGLE_LAYER_BGA:
+		case UI_TOGGLE_LAYER_BGB:
+		case UI_TOGGLE_LAYER_SPRITES:
+			if (allow_content_binds && current_system->type == SYSTEM_GENESIS) {
+				genesis_context *gen = (genesis_context *)current_system;
+				uint8_t bit = binding->subtype_a == UI_TOGGLE_LAYER_BGA ? LAYER_DISABLED_BGA
+				            : binding->subtype_a == UI_TOGGLE_LAYER_BGB ? LAYER_DISABLED_BGB
+				            : LAYER_DISABLED_SPRITES;
+				gen->vdp->layer_disabled ^= bit;
+				const char *layer_name = binding->subtype_a == UI_TOGGLE_LAYER_BGA ? "BGA"
+				                       : binding->subtype_a == UI_TOGGLE_LAYER_BGB ? "BGB"
+				                       : "Sprites";
+				char msg[64];
+				snprintf(msg, sizeof(msg), "%s: %s", layer_name,
+				         (gen->vdp->layer_disabled & bit) ? "Disabled" : "Enabled");
+				render_set_osd_message(msg);
+			}
+			break;
 		}
 		break;
 	}
@@ -740,6 +769,14 @@ int parse_binding_target(int device_num, const char * target, tern_node * padbut
 			*subtype_a = UI_CD_GRAPHICS_DEBUG;
 		} else if (!strcmp(target + 3, "paste")) {
 			*subtype_a = UI_PASTE;
+		} else if (!strcmp(target + 3, "toggle_layer_bga")) {
+			*subtype_a = UI_TOGGLE_LAYER_BGA;
+		} else if (!strcmp(target + 3, "toggle_layer_bgb")) {
+			*subtype_a = UI_TOGGLE_LAYER_BGB;
+		} else if (!strcmp(target + 3, "toggle_layer_sprites")) {
+			*subtype_a = UI_TOGGLE_LAYER_SPRITES;
+		} else if (!strcmp(target + 3, "reset_layers")) {
+			*subtype_a = UI_RESET_LAYERS;
 		} else {
 			warning("Unreconized UI binding type %s\n", target);
 			return 0;
