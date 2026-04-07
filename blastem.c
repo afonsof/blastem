@@ -491,6 +491,16 @@ int main(int argc, char ** argv)
 				}
 				statefile = argv[i];
 				break;
+			case 'S':
+				i++;
+				if (i >= argc) {
+					fatal_error("-S must be followed by a savestate filename\n");
+				}
+				statefile = argv[i];
+				screenshot_and_exit = 1;
+				headless = 1;
+				exit_after = 1; // Exit after 1 frame
+				break;
 			case 't':
 				force_no_terminal();
 				break;
@@ -527,6 +537,7 @@ int main(int argc, char ** argv)
 					"	-f          Toggles fullscreen mode\n"
 					"	-g          Disable OpenGL rendering\n"
 					"	-s FILE     Load a GST format savestate from FILE\n"
+					"	-S FILE     Headless mode: load state from FILE, save screenshot and exit\n"
 					"	-o FILE     Load FILE as a lock-on cartridge\n"
 					"	-d          Enter debugger on startup\n"
 					"	-n          Disable Z80\n"
