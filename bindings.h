@@ -32,5 +32,6 @@ void bindings_reacquire_capture(void);
 void set_content_binding_state(uint8_t enabled);
 uint8_t get_content_binding_state(void);
 void bindings_set_joy_state(int joystick, uint8_t enabled);
+char *get_content_config_path(char *config_path, char *config_template, char *default_name);
 
 #endif //BINDINGS_H_

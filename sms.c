@@ -1125,6 +1125,9 @@ static void run_sms(system_header *system)
 
 			if(exit_after){
 				if (elapsed >= exit_after) {
+					if (screenshot_and_exit) {
+						save_screenshot_and_exit();
+					}
 					exit(0);
 				} else {
 					exit_after -= elapsed;

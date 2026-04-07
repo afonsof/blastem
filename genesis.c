@@ -606,6 +606,9 @@ static m68k_context *sync_components(m68k_context * context, uint32_t address)
 
 		if(exit_after){
 			if (elapsed >= exit_after) {
+				if (screenshot_and_exit) {
+					save_screenshot_and_exit();
+				}
 				exit(0);
 			} else {
 				exit_after -= elapsed;
@@ -875,6 +878,9 @@ static m68k_context* sync_components_pico(m68k_context * context, uint32_t addre
 
 		if(exit_after){
 			if (elapsed >= exit_after) {
+				if (screenshot_and_exit) {
+					save_screenshot_and_exit();
+				}
 				exit(0);
 			} else {
 				exit_after -= elapsed;

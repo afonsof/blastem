@@ -77,6 +77,32 @@ void update_title(char *rom_name)
 	render_update_caption(title);
 }
 
+#include "png.h"
+void save_screenshot_and_exit()
+{
+	if (!current_system || !current_system->get_vdp) {
+		exit(0);
+	}
+	vdp_context *v_context = current_system->get_vdp(current_system);
+	if (!v_context || !v_context->fb) {
+		exit(0);
+	}
+	char *path = get_content_config_path("ui\0screenshot_path\0", "ui\0screenshot_template\0", "blastem_%c.png");
+	FILE *f = fopen(path, "wb");
+	if (f) {
+		uint32_t width = v_context->h40_lines > 0 ? 320 : 256;
+		width += HORIZ_BORDER;
+		uint32_t height = v_context->output_lines;
+		save_png(f, v_context->fb, width, height, v_context->output_pitch);
+		fclose(f);
+		debug_message("Screenshot saved to %s\n", path);
+	} else {
+		warning("Failed to open screenshot file %s for writing\n", path);
+	}
+	free(path);
+	exit(0);
+}
+
 static char *get_save_dir(system_media *media)
 {
 	char *savedir_template = tern_find_path(config, "ui\0save_path\0", TVAL_PTR).ptrval;
