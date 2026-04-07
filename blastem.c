@@ -47,6 +47,7 @@ int headless = 0;
 int exit_after = 0;
 int z80_enabled = 1;
 int frame_limit = 0;
+int screenshot_and_exit = 0;
 uint8_t use_native_states = 1;
 
 tern_node * config;
