@@ -90,9 +90,9 @@ void save_screenshot_and_exit()
 	char *path = get_content_config_path("ui\0screenshot_path\0", "ui\0screenshot_template\0", "blastem_%c.png");
 	FILE *f = fopen(path, "wb");
 	if (f) {
-		uint32_t width = v_context->h40_lines > 0 ? 320 : 256;
+		uint32_t width = (v_context->regs[REG_MODE_4] & BIT_H40) ? 320 : 256;
 		width += HORIZ_BORDER;
-		uint32_t height = v_context->output_lines;
+		uint32_t height = v_context->inactive_start + v_context->border_bot + v_context->border_top;
 		save_png(f, v_context->fb, width, height, v_context->output_pitch);
 		fclose(f);
 		debug_message("Screenshot saved to %s\n", path);
@@ -525,7 +525,7 @@ int main(int argc, char ** argv)
 				statefile = argv[i];
 				screenshot_and_exit = 1;
 				headless = 1;
-				exit_after = 1; // Exit after 1 frame
+				exit_after = 60; // Exit after 10 frames to ensure stability
 				break;
 			case 't':
 				force_no_terminal();

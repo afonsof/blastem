@@ -521,6 +521,7 @@ vdp_context *init_vdp_context(uint8_t region_pal, uint8_t has_max_vsram, uint8_t
 	if (headless) {
 		context->fb = malloc(512 * LINEBUF_SIZE * sizeof(pixel_t));
 		context->output_pitch = LINEBUF_SIZE * sizeof(pixel_t);
+		memset(context->fb, 0, 512 * LINEBUF_SIZE * sizeof(pixel_t));
 	} else {
 		context->cur_buffer = FRAMEBUFFER_ODD;
 		context->fb = render_get_framebuffer(FRAMEBUFFER_ODD, &context->output_pitch);

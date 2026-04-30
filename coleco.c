@@ -323,6 +323,7 @@ static void start_coleco(system_header *system, char *statefile)
 
 	if (statefile) {
 		load_state_path(coleco, statefile);
+		coleco->last_frame = coleco->vdp->frame;
 	}
 
 	if (system->enter_debugger) {

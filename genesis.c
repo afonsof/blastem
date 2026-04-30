@@ -2081,6 +2081,7 @@ static void start_genesis(system_header *system, char *statefile)
 			}
 		}
 		printf("Loaded %s\n", statefile);
+		gen->last_frame = gen->vdp->frame;
 		if (gen->header.enter_debugger) {
 			gen->header.enter_debugger = 0;
 #ifndef IS_LIB

@@ -1233,6 +1233,7 @@ static void start_sms(system_header *system, char *statefile)
 
 	if (statefile) {
 		load_state_path(sms, statefile);
+		sms->last_frame = sms->vdp->frame;
 	}
 
 	if (system->enter_debugger) {
