@@ -5,6 +5,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#ifndef _WIN32
+#include <unistd.h>
+#endif
 #include "movie.h"
 #include "io.h"
 #include "genesis.h"
@@ -95,6 +98,7 @@ typedef struct {
 	bsm_frame_input  *input_buffer;
 	uint32_t         input_buffer_cap;  /* allocated slots */
 	uint32_t         input_buffer_used; /* filled slots since last flush */
+	uint8_t          freeze_seen;   /* setado por movie_unfreeze, checado por movie_check_after_load */
 } bsm_movie;
 
 static bsm_movie movie;
@@ -231,4 +235,77 @@ void movie_update(system_header *system)
 	if (movie.input_buffer_used >= movie.input_buffer_cap) {
 		flush_inputs();
 	}
+}
+
+/* ---- Re-recording (sub-epic 2) ---- */
+
+void movie_prepare_for_load(void)
+{
+	movie.freeze_seen = 0;
+}
+
+void movie_check_after_load(void)
+{
+	if (movie.state != BSM_STATE_RECORD) {
+		movie.freeze_seen = 0;
+		return;
+	}
+	if (!movie.freeze_seen) {
+		warning("movie_check_after_load: save state sem SECTION_MOVIE — parando gravação\n");
+		movie_record_stop();
+	}
+	movie.freeze_seen = 0;
+}
+
+void movie_freeze(serialize_buffer *buf)
+{
+	if (movie.state != BSM_STATE_RECORD) {
+		return;
+	}
+	start_section(buf, SECTION_MOVIE);
+	save_int32(buf, movie.header.frame_count);
+	save_int32(buf, movie.input_buffer_used);
+	save_buffer8(buf, (uint8_t *)movie.input_buffer,
+	             movie.input_buffer_used * sizeof(bsm_frame_input));
+	end_section(buf);
+}
+
+void movie_unfreeze(deserialize_buffer *buf, void *vgen)
+{
+	uint32_t saved_frame_count = load_int32(buf);
+	uint32_t saved_buffer_used = load_int32(buf);
+
+	movie.freeze_seen = 1;
+
+	if (movie.state != BSM_STATE_RECORD) {
+		/* Not recording: ignore data. load_section already advances the parent cursor. */
+		return;
+	}
+
+	if (saved_buffer_used > movie.input_buffer_cap) {
+		saved_buffer_used = movie.input_buffer_cap;
+	}
+	load_buffer8(buf, (uint8_t *)movie.input_buffer,
+	             saved_buffer_used * sizeof(bsm_frame_input));
+
+	/* Flush pending buffer before truncating the file */
+	flush_inputs();
+
+	/* Truncate .bsm on disk to the save state's frame position */
+	uint32_t trunc_pos = movie.header.input_offset +
+	                     saved_frame_count * sizeof(bsm_frame_input);
+#ifdef _WIN32
+	_chsize(fileno(movie.file), trunc_pos);
+#else
+	ftruncate(fileno(movie.file), trunc_pos);
+#endif
+	fseek(movie.file, trunc_pos, SEEK_SET);
+
+	movie.input_buffer_used     = saved_buffer_used;
+	movie.header.frame_count    = saved_frame_count;
+	movie.header.rerecord_count++;
+
+	bsm_write_header(movie.file, &movie.header);
+	debug_message("Movie rerecord: truncado para frame %u (rerecord_count=%u)\n",
+	              saved_frame_count, movie.header.rerecord_count);
 }

@@ -7,6 +7,11 @@
 #include "genesis.h"   /* for SYSTEM_GENESIS */
 #include "serialize.h" /* for init_serialize, serialize_buffer */
 
+/* Stubs for util.c dependencies */
+int headless = 1;
+void render_errorbox(char *msg) { (void)msg; }
+void render_infobox(char *msg) { (void)msg; }
+
 static uint8_t *fake_serialize(system_header *s, size_t *sz)
 {
 	(void)s;

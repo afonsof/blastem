@@ -329,7 +329,7 @@ ZTESTOBJS:=ztestrun.o serialize.o $(Z80OBJS) $(TRANSOBJS) util.o
 CPMOBJS:=blastcpm.o util.o serialize.o $(Z80OBJS) $(TRANSOBJS)
 UPD78K2RUNOBJS:=upd78k2.o upd78k2run.o util.o backend.o tern.o
 UPDDISOBJS:=upddis.o upd78k2_dis.o disasm.o tern.o util.o backend.o
-TESTMOVIEOBJS:=testmovie.o movie.o
+TESTMOVIEOBJS:=testmovie.o movie.o serialize.o util.o $(LIBZOBJS)
 
 LIBCFLAGS=$(CFLAGS) -fpic -DIS_LIB -DDISABLE_ZLIB
 
