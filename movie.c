@@ -139,6 +139,81 @@ void movie_play_stop(void)
 	debug_message("Movie playback stopped\n");
 }
 
+int movie_play_start(system_header *system, const char *filename)
+{
+	if (movie.state != BSM_STATE_NONE)
+		movie_record_stop();
+
+	FILE *f = fopen(filename, "rb");
+	if (!f) {
+		warning("movie_play_start: cannot open %s\n", filename);
+		return -1;
+	}
+
+	bsm_header h;
+	if (bsm_read_header(f, &h) != 0) {
+		warning("movie_play_start: invalid .bsm file\n");
+		fclose(f);
+		return -1;
+	}
+
+	/* ROM CRC check — warning only, never blocks playback */
+	uint32_t rom_crc = (uint32_t)crc32(0,
+		(const Bytef *)system->info.rom, system->info.rom_size);
+	if (h.rom_crc32 != rom_crc) {
+		warning("movie_play_start: ROM CRC mismatch "
+			"(movie=0x%08x current=0x%08x) — proceeding anyway\n",
+			h.rom_crc32, rom_crc);
+	}
+
+	/* Read and restore embedded save state */
+	fseek(f, h.savestate_offset, SEEK_SET);
+	uint32_t ss_size;
+	if (fread(&ss_size, 4, 1, f) != 1) {
+		warning("movie_play_start: failed to read save state size\n");
+		fclose(f);
+		return -1;
+	}
+	uint8_t *ss_buf = malloc(ss_size);
+	if (!ss_buf || fread(ss_buf, 1, ss_size, f) != ss_size) {
+		warning("movie_play_start: failed to read embedded save state\n");
+		free(ss_buf);
+		fclose(f);
+		return -1;
+	}
+	system->deserialize(system, ss_buf, ss_size);
+	free(ss_buf);
+
+	/* Load all input frames into RAM */
+	if (!movie.input_buffer || movie.input_buffer_cap < h.frame_count) {
+		free(movie.input_buffer);
+		movie.input_buffer = malloc(h.frame_count * sizeof(bsm_frame_input));
+		if (!movie.input_buffer) {
+			warning("movie_play_start: out of memory for input buffer\n");
+			fclose(f);
+			return -1;
+		}
+		movie.input_buffer_cap = h.frame_count;
+	}
+
+	fseek(f, h.input_offset, SEEK_SET);
+	if (fread(movie.input_buffer, sizeof(bsm_frame_input),
+		  h.frame_count, f) != h.frame_count) {
+		warning("movie_play_start: failed to read input buffer\n");
+		fclose(f);
+		return -1;
+	}
+	fclose(f);
+
+	movie.header     = h;
+	movie.play_frame = 0;
+	movie.state      = BSM_STATE_PLAY;
+
+	debug_message("Movie playback started: %s (%u frames)\n",
+		      filename, h.frame_count);
+	return 0;
+}
+
 int movie_record_start(system_header *system, const char *filename)
 {
 	if (movie.state != BSM_STATE_NONE) {
@@ -228,15 +303,33 @@ void movie_record_stop(void)
 
 void movie_update(system_header *system)
 {
-	if (movie.state != BSM_STATE_RECORD) {
-		return;
-	}
-
 	if (system->type != SYSTEM_GENESIS && system->type != SYSTEM_SEGACD) {
 		return;
 	}
 
 	genesis_context *gen = (genesis_context *)system;
+
+	if (movie.state == BSM_STATE_PLAY) {
+		if (movie.play_frame >= movie.header.frame_count) {
+			/* Input buffer exhausted — go live */
+			movie.state = BSM_STATE_NONE;
+			debug_message("Movie playback ended at frame %u — going live\n",
+				      movie.play_frame);
+			return;
+		}
+		bsm_frame_input *frame = &movie.input_buffer[movie.play_frame];
+		io_port *port1 = find_gamepad(&gen->io, 1);
+		io_port *port2 = find_gamepad(&gen->io, 2);
+		if (port1) io_port_set_pad_state(port1, frame->pad1);
+		if (port2) io_port_set_pad_state(port2, frame->pad2);
+		movie.play_frame++;
+		return;
+	}
+
+	if (movie.state != BSM_STATE_RECORD) {
+		return;
+	}
+
 	io_port *port1 = find_gamepad(&gen->io, 1);
 	io_port *port2 = find_gamepad(&gen->io, 2);
 
