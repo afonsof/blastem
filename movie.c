@@ -175,7 +175,6 @@ int movie_record_start(system_header *system, const char *filename)
 		if (!movie.input_buffer) {
 			warning("movie_record_start: out of memory for input buffer\n");
 			fclose(f);
-			free(state_data);
 			return -1;
 		}
 		movie.input_buffer_cap = BSM_INPUT_FLUSH_FRAMES;
@@ -184,7 +183,11 @@ int movie_record_start(system_header *system, const char *filename)
 
 	movie.file  = f;
 	movie.state = BSM_STATE_RECORD;
-	atexit(movie_record_stop);
+	static uint8_t atexit_registered = 0;
+	if (!atexit_registered) {
+		atexit(movie_record_stop);
+		atexit_registered = 1;
+	}
 
 	debug_message("Movie recording started: %s\n", filename);
 	return 0;
