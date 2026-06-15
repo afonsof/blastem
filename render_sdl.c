@@ -471,6 +471,28 @@ static GLuint load_shader(char * fname, GLenum shader_type)
 #endif
 
 static pixel_t texture_buf[512 * 513];
+
+/* ---- Headless framebuffer access (sub-epic 4) ---- */
+
+static uint8_t export_fb_ready = 0;
+
+void render_export_init(void)
+{
+	if (export_fb_ready)
+		return;
+	/* Ensure texture_buf is allocated and zeroed.
+	 * In normal operation texture_buf is a static array (512*513),
+	 * but we zero it here for deterministic initial content. */
+	memset(texture_buf, 0, sizeof(texture_buf));
+	export_fb_ready = 1;
+}
+
+pixel_t *render_export_get_fb(int *pitch)
+{
+	*pitch = PITCH_BYTES(LINEBUF_SIZE);
+	return texture_buf;
+}
+
 #ifdef DISABLE_OPENGL
 #ifdef USE_RGB565
 #define RENDER_FORMAT SDL_PIXELFORMAT_RGB565
