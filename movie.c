@@ -107,6 +107,7 @@ typedef struct {
 	FILE             *export_pipe;     /* ffmpeg pipe */
 	uint32_t         export_frame;     /* frames captured so far */
 	uint32_t         export_total;     /* total frames to capture */
+	uint32_t         export_last_vdp_frame; /* VDP frame of last capture */
 	uint8_t          export_active;    /* 1 during export */
 	int              export_pal;       /* 1 if PAL, for fps detection */
 } bsm_movie;
@@ -176,6 +177,12 @@ void movie_export_capture(system_header *system, uint8_t which, int width)
 		return;
 
 	genesis_context *gen = (genesis_context *)system;
+
+	/* The VDP frame boundary fires multiple times per frame
+	 * (once per post-render line).  Only capture each VDP frame once. */
+	if (gen->vdp->frame == movie.export_last_vdp_frame)
+		return;
+	movie.export_last_vdp_frame = gen->vdp->frame;
 
 	/* Read framebuffer directly from the VDP context.
 	 * In headless mode the VDP allocates its own fb which stays
@@ -274,6 +281,7 @@ int movie_export_start(system_header *system, const char *bsm_path, const char *
 	movie.export_pipe   = pipe_out;
 	movie.export_frame  = 0;
 	movie.export_total  = movie.header.frame_count;
+	movie.export_last_vdp_frame = UINT32_MAX;
 	movie.export_active = 1;
 	movie.export_pal    = is_pal;
 
