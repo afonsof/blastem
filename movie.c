@@ -11,6 +11,9 @@
 #include "zlib/zlib.h"
 #include "util.h"
 
+_Static_assert(sizeof(bsm_header) == BSM_HEADER_SIZE,
+               "bsm_header layout changed — file format broken");
+
 /* ---- Low-level format I/O ---- */
 
 /* Write all 64 header bytes to f at position 0. */
@@ -168,7 +171,13 @@ int movie_record_start(system_header *system, const char *filename)
 
 	/* Allocate input buffer */
 	if (!movie.input_buffer) {
-		movie.input_buffer     = malloc(BSM_INPUT_FLUSH_FRAMES * sizeof(bsm_frame_input));
+		movie.input_buffer = malloc(BSM_INPUT_FLUSH_FRAMES * sizeof(bsm_frame_input));
+		if (!movie.input_buffer) {
+			warning("movie_record_start: out of memory for input buffer\n");
+			fclose(f);
+			free(state_data);
+			return -1;
+		}
 		movie.input_buffer_cap = BSM_INPUT_FLUSH_FRAMES;
 	}
 	movie.input_buffer_used = 0;
@@ -197,6 +206,10 @@ void movie_record_stop(void)
 void movie_update(system_header *system)
 {
 	if (movie.state != BSM_STATE_RECORD) {
+		return;
+	}
+
+	if (system->type != SYSTEM_GENESIS && system->type != SYSTEM_SEGACD) {
 		return;
 	}
 
