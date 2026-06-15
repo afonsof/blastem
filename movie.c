@@ -13,6 +13,7 @@
 #include "genesis.h"
 #include "zlib/zlib.h"
 #include "util.h"
+#include "vdp.h"
 
 _Static_assert(sizeof(bsm_header) == BSM_HEADER_SIZE,
                "bsm_header layout changed — file format broken");
@@ -116,6 +117,42 @@ static void flush_inputs(void)
 	      SEEK_SET);
 	fwrite(movie.input_buffer, sizeof(bsm_frame_input), movie.input_buffer_used, movie.file);
 	movie.input_buffer_used = 0;
+}
+
+/* ---- Video export helpers (sub-epic 4) ---- */
+
+/* Converte framebuffer ARGB8888 para RGB24 e escreve no pipe do ffmpeg.
+ * Pula BORDER_LEFT pixels de borda à esquerda e lê apenas a área visível.
+ * Retorna 0 em sucesso, -1 em erro de escrita.
+ * NOTA: não-static para acesso por testmovie.c */
+int movie_export_write_frame(pixel_t *fb, int pitch,
+                                     uint32_t vis_width, uint32_t vis_height, FILE *out)
+{
+	uint8_t *row_base = (uint8_t *)fb;
+	size_t rgb_row_size = vis_width * 3;
+	uint8_t *rgb_row = malloc(rgb_row_size);
+	if (!rgb_row) {
+		warning("movie_export_write_frame: out of memory for row buffer\n");
+		return -1;
+	}
+
+	for (uint32_t y = 0; y < vis_height; y++) {
+		/* Pula colunas de borda esquerda */
+		uint32_t *src = (uint32_t *)(row_base + (size_t)y * pitch) + BORDER_LEFT;
+		for (uint32_t x = 0; x < vis_width; x++) {
+			uint32_t argb = src[x];
+			rgb_row[x * 3 + 0] = (argb >> 16) & 0xFF; /* R */
+			rgb_row[x * 3 + 1] = (argb >> 8)  & 0xFF; /* G */
+			rgb_row[x * 3 + 2] = argb         & 0xFF; /* B */
+		}
+		if (fwrite(rgb_row, 1, rgb_row_size, out) != rgb_row_size) {
+			warning("movie_export_write_frame: write failed (pipe broken?)\n");
+			free(rgb_row);
+			return -1;
+		}
+	}
+	free(rgb_row);
+	return 0;
 }
 
 /* ---- Public API ---- */

@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include "system.h"
 #include "serialize.h"
+#include "pixel.h"
 
 /* ---- File format constants ---- */
 #define BSM_MAGIC            0x1a4d5342u  /* "BSM\x1a" little-endian */
@@ -104,5 +105,13 @@ void movie_play_stop(void);
 
 /* Returns the index of the next frame to inject (0 when not playing). */
 uint32_t movie_get_play_frame(void);
+
+/* ---- Video export (sub-epic 4) ---- */
+
+/* Converte framebuffer ARGB8888 para RGB24 e escreve no pipe.
+ * Pula BORDER_LEFT pixels de borda à esquerda.
+ * Retorna 0 em sucesso, -1 em erro de escrita. */
+int movie_export_write_frame(pixel_t *fb, int pitch,
+                             uint32_t vis_width, uint32_t vis_height, FILE *out);
 
 #endif /* MOVIE_H_ */
