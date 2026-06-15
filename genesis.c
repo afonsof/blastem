@@ -133,6 +133,9 @@ void genesis_serialize(genesis_context *gen, serialize_buffer *buf, uint32_t m68
 		segacd_context *cd = gen->expansion;
 		segacd_serialize(cd, buf, all);
 	}
+#ifndef IS_LIB
+	movie_freeze(buf);
+#endif
 }
 
 static uint8_t *serialize(system_header *sys, size_t *size_out)
