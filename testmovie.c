@@ -180,6 +180,34 @@ static void test_freeze_unfreeze_roundtrip(void)
 	printf("test_freeze_unfreeze_roundtrip: PASSED\n");
 }
 
+static void test_io_port_set_pad_state(void)
+{
+	/* Build a minimal io_port with a 6-button gamepad */
+	io_port port;
+	memset(&port, 0, sizeof(port));
+	port.device_type = IO_GAMEPAD6;
+
+	/* All buttons released: read should return 0 */
+	uint16_t state = io_read_pad_buttons(&port);
+	assert(state == 0);
+
+	/* Set A+B+START pressed */
+	uint16_t want = (1u << (BUTTON_A     - DPAD_UP))
+	              | (1u << (BUTTON_B     - DPAD_UP))
+	              | (1u << (BUTTON_START - DPAD_UP));
+	io_port_set_pad_state(&port, want);
+
+	state = io_read_pad_buttons(&port);
+	assert(state == want);
+
+	/* Release all -- set 0 */
+	io_port_set_pad_state(&port, 0);
+	state = io_read_pad_buttons(&port);
+	assert(state == 0);
+
+	printf("test_io_port_set_pad_state: PASSED\n");
+}
+
 int main(void)
 {
 	test_header_roundtrip();
@@ -188,6 +216,7 @@ int main(void)
 	test_stop_on_missing_section();
 	test_freeze_writes_section();
 	test_freeze_unfreeze_roundtrip();
+	test_io_port_set_pad_state();
 	printf("All tests passed.\n");
 	return 0;
 }

@@ -159,6 +159,7 @@ void io_deserialize(deserialize_buffer *buf, void *vport);
 void io_port_gamepad_down(io_port *port, uint8_t button);
 void io_port_gamepad_up(io_port *port, uint8_t button);
 uint16_t io_read_pad_buttons(io_port *port);
+void io_port_set_pad_state(io_port *port, uint16_t buttons);
 void io_gamepad_down(sega_io *io, uint8_t gamepad_num, uint8_t button);
 void io_gamepad_up(sega_io *io, uint8_t gamepad_num, uint8_t button);
 void io_mouse_down(sega_io *io, uint8_t mouse_num, uint8_t button);
