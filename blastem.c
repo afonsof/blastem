@@ -422,6 +422,7 @@ int main(int argc, char ** argv)
 	uint8_t debug_target = 0;
 	char *port;
 	char *record_file = NULL;
+	char *play_file = NULL;
 	for (int i = 1; i < argc; i++) {
 		if (argv[i][0] == '-') {
 			switch(argv[i][1]) {
@@ -489,6 +490,13 @@ int main(int argc, char ** argv)
 					fatal_error("-R must be followed by a movie filename\n");
 				}
 				record_file = argv[i];
+				break;
+			case 'P':
+				i++;
+				if (i >= argc) {
+					fatal_error("-P must be followed by a movie filename\n");
+				}
+				play_file = argv[i];
 				break;
 			case 'm':
 				i++;
@@ -581,6 +589,7 @@ int main(int argc, char ** argv)
 					"	-y          Log individual YM-2612 channels to WAVE files\n"
 					"   -e FILE     Write hardware event log to FILE\n"
 					"	-R FILE     Record gameplay to FILE in .bsm format\n"
+					"\t-P FILE     Play back gameplay from FILE in .bsm format\n"
 				);
 				return 0;
 			default:
@@ -732,6 +741,12 @@ int main(int argc, char ** argv)
 		if (movie_record_start(current_system, record_file)) {
 			warning("Failed to start movie recording to %s\n", record_file);
 			record_file = NULL;
+		}
+	}
+	if (play_file && current_system) {
+		if (movie_play_start(current_system, play_file)) {
+			warning("Failed to start movie playback from %s\n", play_file);
+			play_file = NULL;
 		}
 	}
 	current_system->start_context(current_system,  menu ? NULL : statefile);
