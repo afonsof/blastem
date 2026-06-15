@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "render.h"
+#include "movie.h"
 #include "util.h"
 #include "event_log.h"
 #include "terminal.h"
@@ -3065,6 +3066,13 @@ static void advance_output_line(vdp_context *context)
 			context->cur_buffer = is_even ? FRAMEBUFFER_EVEN : FRAMEBUFFER_ODD;
 			context->pushed_frame = 1;
 			context->fb = NULL;
+		}
+		/* Sub-epic 4: video export hook — fires in both headless
+		 * and non-headless mode. */
+		if (current_system) {
+			movie_export_capture(current_system,
+				context->cur_buffer,
+				context->h40_lines > (context->inactive_start + context->border_top) / 2 ? LINEBUF_SIZE : (256+HORIZ_BORDER));
 		}
 		vdp_update_per_frame_debug(context);
 		context->h40_lines = 0;

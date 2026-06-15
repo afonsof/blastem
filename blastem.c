@@ -757,8 +757,10 @@ int main(int argc, char ** argv)
 	}
 	if (export_bsm && current_system) {
 		/* Headless export: set up ffmpeg pipe and export state.
-		 * Frames will be captured by movie_export_capture() during
-		 * normal emulation. */
+		 * Frames will be captured by movie_export_capture() called
+		 * from vdp.c frame boundary (works in headless mode).
+		 * headless=1 skips SDL window, Nuklear UI, and font loading. */
+		headless = 1;
 		if (movie_export_start(current_system, export_bsm, export_mp4) != 0) {
 			warning("Failed to start movie export %s to %s\n", export_bsm, export_mp4);
 			return 1;
