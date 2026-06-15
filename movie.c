@@ -163,9 +163,11 @@ int movie_export_write_frame(pixel_t *fb, int pitch,
 	return 0;
 }
 
-/* Callback from render_sdl.c: called every time the VDP finishes a frame.
- * When export is active, captures the framebuffer and writes to the ffmpeg pipe.
- * When all frames are captured, closes the pipe and requests emulator exit. */
+/* Callback from vdp.c frame boundary: called every time the VDP finishes a
+ * frame.  When export is active, reads the framebuffer directly from the
+ * VDP context (works in both headless and windowed modes) and writes to
+ * the ffmpeg pipe.  When all frames are captured, closes the pipe and
+ * requests emulator exit. */
 void movie_export_capture(system_header *system, uint8_t which, int width)
 {
 	if (!movie.export_active)
@@ -175,14 +177,16 @@ void movie_export_capture(system_header *system, uint8_t which, int width)
 
 	genesis_context *gen = (genesis_context *)system;
 
-	/* Ensure VDP has finished the current framebuffer */
-	vdp_force_update_framebuffer(gen->vdp);
-
-	/* Capture framebuffer */
-	int pitch;
-	pixel_t *fb = render_export_get_fb(&pitch);
+	/* Read framebuffer directly from the VDP context.
+	 * In headless mode the VDP allocates its own fb which stays
+	 * valid across frames; in windowed mode fb points into texture_buf.
+	 * We use fb + border_top * pitch to get the start of the visible area,
+	 * because context->output has advanced past all visible lines by now. */
+	int pitch      = gen->vdp->output_pitch;
+	pixel_t *fb    = (pixel_t *)((char *)gen->vdp->fb
+	                   + pitch * gen->vdp->border_top);
 	if (!fb) {
-		warning("movie_export_capture: failed to get framebuffer at frame %u\n",
+		warning("movie_export_capture: null framebuffer at frame %u\n",
 		        movie.export_frame);
 		movie.export_active = 0;
 		if (movie.export_pipe) {
