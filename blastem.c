@@ -27,6 +27,7 @@
 #include "zip.h"
 #include "cdimage.h"
 #include "event_log.h"
+#include "movie.h"
 #ifndef DISABLE_NUKLEAR
 #include "nuklear_ui/blastem_nuklear.h"
 #endif
@@ -420,6 +421,7 @@ int main(int argc, char ** argv)
 	uint8_t fullscreen = FULLSCREEN_DEFAULT, use_gl = 1;
 	uint8_t debug_target = 0;
 	char *port;
+	char *record_file = NULL;
 	for (int i = 1; i < argc; i++) {
 		if (argv[i][0] == '-') {
 			switch(argv[i][1]) {
@@ -480,6 +482,13 @@ int main(int argc, char ** argv)
 				if (!force_region) {
 					fatal_error("'%c' is not a valid region character for the -r option\n", argv[i][0]);
 				}
+				break;
+			case 'R':
+				i++;
+				if (i >= argc) {
+					fatal_error("-R must be followed by a movie filename\n");
+				}
+				record_file = argv[i];
 				break;
 			case 'm':
 				i++;
@@ -571,6 +580,7 @@ int main(int argc, char ** argv)
 					"	-l          Log 68K code addresses (useful for assemblers)\n"
 					"	-y          Log individual YM-2612 channels to WAVE files\n"
 					"   -e FILE     Write hardware event log to FILE\n"
+					"	-R FILE     Record gameplay to FILE in .bsm format\n"
 				);
 				return 0;
 			default:
@@ -718,6 +728,12 @@ int main(int argc, char ** argv)
 	current_system->debugger_type = dtype;
 	current_system->enter_debugger = start_in_debugger && menu == debug_target;
 #ifndef __EMSCRIPTEN__
+	if (record_file && current_system) {
+		if (movie_record_start(current_system, record_file)) {
+			warning("Failed to start movie recording to %s\n", record_file);
+			record_file = NULL;
+		}
+	}
 	current_system->start_context(current_system,  menu ? NULL : statefile);
 	render_video_loop();
 	for(;;)
@@ -760,5 +776,6 @@ int main(int argc, char ** argv)
 	}
 #endif //__EMSCRIPTEN__
 
+	movie_record_stop();
 	return 0;
 }
