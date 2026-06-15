@@ -505,6 +505,7 @@ int main(int argc, char ** argv)
 				if (strcmp(argv[i] + 2, "export-movie") == 0 && i + 2 < argc) {
 					export_bsm = argv[++i];
 					export_mp4 = argv[++i];
+					headless = 1;
 					continue;
 				}
 				fatal_error("Unrecognized switch %s\n", argv[i]);
@@ -758,9 +759,7 @@ int main(int argc, char ** argv)
 	if (export_bsm && current_system) {
 		/* Headless export: set up ffmpeg pipe and export state.
 		 * Frames will be captured by movie_export_capture() called
-		 * from vdp.c frame boundary (works in headless mode).
-		 * headless=1 skips SDL window, Nuklear UI, and font loading. */
-		headless = 1;
+		 * from vdp.c frame boundary (works in headless mode). */
 		if (movie_export_start(current_system, export_bsm, export_mp4) != 0) {
 			warning("Failed to start movie export %s to %s\n", export_bsm, export_mp4);
 			return 1;
