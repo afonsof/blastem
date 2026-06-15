@@ -170,10 +170,9 @@ int movie_play_start(system_header *system, const char *filename)
     free(ss_buf);
 
     /* Carregar todo o buffer de inputs em RAM */
-    uint32_t input_bytes = h.frame_count * sizeof(bsm_frame_input);
     if (!movie.input_buffer || movie.input_buffer_cap < h.frame_count) {
         free(movie.input_buffer);
-        movie.input_buffer = malloc(input_bytes);
+        movie.input_buffer = malloc(h.frame_count * sizeof(bsm_frame_input));
         if (!movie.input_buffer) {
             warning("movie_play_start: out of memory for input buffer\n");
             fclose(f);
