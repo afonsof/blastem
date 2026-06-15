@@ -91,4 +91,18 @@ void movie_prepare_for_load(void);
 /* Chamar APÓS genesis_deserialize: para gravação se SECTION_MOVIE não apareceu. */
 void movie_check_after_load(void);
 
+/* ---- Playback (sub-epic 3) ---- */
+
+/* Opens filename, restores the embedded save state via system->deserialize,
+ * loads all input frames into RAM and switches to BSM_STATE_PLAY.
+ * Returns 0 on success, -1 on error. Safe to call while recording (stops it). */
+int movie_play_start(system_header *system, const char *filename);
+
+/* Stops playback immediately, resets play_frame to 0.
+ * Safe to call when not playing. */
+void movie_play_stop(void);
+
+/* Returns the index of the next frame to inject (0 when not playing). */
+uint32_t movie_get_play_frame(void);
+
 #endif /* MOVIE_H_ */

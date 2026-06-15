@@ -99,6 +99,7 @@ typedef struct {
 	uint32_t         input_buffer_cap;  /* allocated slots */
 	uint32_t         input_buffer_used; /* filled slots since last flush */
 	uint8_t          freeze_seen;   /* setado por movie_unfreeze, checado por movie_check_after_load */
+	uint32_t         play_frame;       /* next frame index to inject during BSM_STATE_PLAY */
 } bsm_movie;
 
 static bsm_movie movie;
@@ -122,6 +123,20 @@ static void flush_inputs(void)
 bsm_state movie_get_state(void)
 {
 	return movie.state;
+}
+
+uint32_t movie_get_play_frame(void)
+{
+	return movie.play_frame;
+}
+
+void movie_play_stop(void)
+{
+	if (movie.state != BSM_STATE_PLAY)
+		return;
+	movie.state      = BSM_STATE_NONE;
+	movie.play_frame = 0;
+	debug_message("Movie playback stopped\n");
 }
 
 int movie_record_start(system_header *system, const char *filename)
