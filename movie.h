@@ -15,8 +15,8 @@
 #define BSM_INPUT_FLUSH_FRAMES 4096u
 
 /* Flags (byte 20 of header) */
-#define BSM_FLAG_FROM_RESET  (1 << 0)    /* starts from hard reset, no embedded save state */
-#define BSM_FLAG_PAL         (1 << 1)    /* system is running in PAL (50 Hz) mode */
+#define BSM_FLAG_FROM_RESET  (1u << 0)   /* starts from hard reset, no embedded save state */
+#define BSM_FLAG_PAL         (1u << 1)   /* system is running in PAL (50 Hz) mode */
 
 /* ---- Types ---- */
 
@@ -50,6 +50,8 @@ typedef struct {
 	uint32_t input_offset;      /* offset of first bsm_frame_input in file */
 	uint8_t  reserved2[12];
 } bsm_header;   /* must be BSM_HEADER_SIZE (64) bytes */
+_Static_assert(sizeof(bsm_header) == BSM_HEADER_SIZE,
+               "bsm_header layout changed — file format broken");
 
 /* ---- Public API ---- */
 
