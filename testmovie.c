@@ -52,13 +52,19 @@ static void test_header_roundtrip(void)
 
 static void test_bad_magic(void)
 {
+	/* Write a full 64-byte header but with a wrong magic value,
+	 * so bsm_read_header actually reaches the magic-check branch. */
+	bsm_header bad = {0};
+	bad.magic   = 0xDEADBEEFu;
+	bad.version = BSM_VERSION;
+
 	FILE *f = tmpfile();
 	assert(f != NULL);
-	uint32_t bad = 0xDEADBEEF;
-	fwrite(&bad, 4, 1, f);
+	bsm_write_header(f, &bad);
 	rewind(f);
-	bsm_header h;
-	int result = bsm_read_header(f, &h);
+
+	bsm_header out;
+	int result = bsm_read_header(f, &out);
 	assert(result == -1);
 	fclose(f);
 	printf("test_bad_magic: PASSED\n");
