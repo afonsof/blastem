@@ -163,9 +163,12 @@ int movie_export_write_frame(pixel_t *fb, int pitch,
 static int movie_export_loop(system_header *system, FILE *pipe_out)
 {
 	genesis_context *gen = (genesis_context *)system;
-	int is_h40 = gen->vdp->h40_lines > gen->vdp->output_lines / 2;
+	/* Use VDP registers (restored by deserialize) rather than
+	 * derived fields like output_lines which are 0 until first render. */
+	int is_h40 = gen->vdp->regs[REG_MODE_2] & BIT_H40;
+	int is_pal = gen->vdp->regs[REG_MODE_2] & BIT_PAL;
 	uint32_t vis_width  = is_h40 ? 320 : 256;
-	uint32_t vis_height = gen->vdp->output_lines;
+	uint32_t vis_height = is_pal ? 240 : 224;
 
 	for (uint32_t f = 0; f < movie.header.frame_count; f++) {
 		/* Run one frame of emulation.
@@ -211,10 +214,12 @@ int movie_export_start(system_header *system, const char *bsm_path, const char *
 	/* 3. Detect framerate from header */
 	int fps = (movie.header.flags & BSM_FLAG_PAL) ? 50 : 60;
 
-	/* 4. Detect visible resolution */
-	int is_h40 = gen->vdp->h40_lines > gen->vdp->output_lines / 2;
+	/* 4. Detect visible resolution from VDP registers (restored by deserialize).
+	 * Do NOT use derived fields like output_lines which are 0 until first render. */
+	int is_h40 = gen->vdp->regs[REG_MODE_2] & BIT_H40;
+	int is_pal = movie.header.flags & BSM_FLAG_PAL;
 	uint32_t vis_width  = is_h40 ? 320 : 256;
-	uint32_t vis_height = gen->vdp->output_lines;
+	uint32_t vis_height = is_pal ? 240 : 224;
 
 	/* 5. Open ffmpeg pipe */
 	char cmd[1024];
