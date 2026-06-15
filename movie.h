@@ -121,8 +121,15 @@ int movie_export_write_frame(pixel_t *fb, int pitch,
                              uint32_t vis_width, uint32_t vis_height, FILE *out);
 
 /* Exporta um .bsm para video MP4 via ffmpeg CLI (pipe).
- * Requer ffmpeg no PATH. Roda o emulador em modo headless.
+ * Configura o estado de export e abre pipe; a captura dos frames
+ * ocorre via movie_export_capture() chamado de render_framebuffer_updated.
+ * Requer ffmpeg no PATH.
  * Retorna 0 em sucesso, nao-zero em erro. */
 int movie_export_start(system_header *system, const char *bsm_path, const char *output_path);
+
+/* Callback chamado a cada frame renderizado pelo VDP.
+ * Quando export_active, captura o framebuffer e escreve no pipe.
+ * Quando todos os frames sao capturados, fecha o pipe e seta should_exit. */
+void movie_export_capture(system_header *system, uint8_t which, int width);
 
 #endif /* MOVIE_H_ */

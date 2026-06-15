@@ -103,6 +103,12 @@ typedef struct {
 	uint32_t         input_buffer_used; /* filled slots since last flush */
 	uint8_t          freeze_seen;   /* setado por movie_unfreeze, checado por movie_check_after_load */
 	uint32_t         play_frame;       /* next frame index to inject during BSM_STATE_PLAY */
+	/* Video export (sub-epic 4) */
+	FILE             *export_pipe;     /* ffmpeg pipe */
+	uint32_t         export_frame;     /* frames captured so far */
+	uint32_t         export_total;     /* total frames to capture */
+	uint8_t          export_active;    /* 1 during export */
+	int              export_pal;       /* 1 if PAL, for fps detection */
 } bsm_movie;
 
 static bsm_movie movie;
@@ -157,45 +163,63 @@ int movie_export_write_frame(pixel_t *fb, int pitch,
 	return 0;
 }
 
-/* Executa o loop headless de exportacao.
- * Avanca a maquina frame a frame, captura o framebuffer VDP
- * e escreve cada frame convertido no pipe do ffmpeg. */
-static int movie_export_loop(system_header *system, FILE *pipe_out)
+/* Callback from render_sdl.c: called every time the VDP finishes a frame.
+ * When export is active, captures the framebuffer and writes to the ffmpeg pipe.
+ * When all frames are captured, closes the pipe and requests emulator exit. */
+void movie_export_capture(system_header *system, uint8_t which, int width)
 {
+	if (!movie.export_active)
+		return;
+	if (which > FRAMEBUFFER_EVEN)
+		return;
+
 	genesis_context *gen = (genesis_context *)system;
-	/* Use VDP registers (restored by deserialize) rather than
-	 * derived fields like output_lines which are 0 until first render. */
-	int is_h40 = gen->vdp->regs[REG_MODE_2] & BIT_H40;
-	int is_pal = gen->vdp->regs[REG_MODE_2] & BIT_PAL;
-	uint32_t vis_width  = is_h40 ? 320 : 256;
-	uint32_t vis_height = is_pal ? 240 : 224;
 
-	for (uint32_t f = 0; f < movie.header.frame_count; f++) {
-		/* Run one frame of emulation.
-		 * resume_context advances the machine by one "quantum"
-		 * (typically one frame). movie_update is hooked inside
-		 * the normal flow and injects recorded inputs. */
-		system->resume_context(system);
+	/* Ensure VDP has finished the current framebuffer */
+	vdp_force_update_framebuffer(gen->vdp);
 
-		/* Ensure VDP has finished the current framebuffer */
-		vdp_force_update_framebuffer(gen->vdp);
-
-		/* Capture framebuffer */
-		int pitch;
-		pixel_t *fb = render_export_get_fb(&pitch);
-		if (!fb) {
-			warning("movie_export_loop: failed to get framebuffer at frame %u\n", f);
-			return -1;
+	/* Capture framebuffer */
+	int pitch;
+	pixel_t *fb = render_export_get_fb(&pitch);
+	if (!fb) {
+		warning("movie_export_capture: failed to get framebuffer at frame %u\n",
+		        movie.export_frame);
+		movie.export_active = 0;
+		if (movie.export_pipe) {
+			pclose(movie.export_pipe);
+			movie.export_pipe = NULL;
 		}
-
-		/* Convert and write to ffmpeg pipe */
-		if (movie_export_write_frame(fb, pitch, vis_width, vis_height, pipe_out) != 0) {
-			warning("movie_export_loop: write failed at frame %u\n", f);
-			return -1;
-		}
+		return;
 	}
 
-	return 0;
+	/* Detect resolution from VDP registers (safe after deserialize) */
+	int is_h40 = gen->vdp->regs[REG_MODE_2] & BIT_H40;
+	uint32_t vis_width  = is_h40 ? 320 : 256;
+	uint32_t vis_height = movie.export_pal ? 240 : 224;
+
+	if (movie_export_write_frame(fb, pitch, vis_width, vis_height, movie.export_pipe) != 0) {
+		warning("movie_export_capture: write failed at frame %u\n",
+		        movie.export_frame);
+		movie.export_active = 0;
+		pclose(movie.export_pipe);
+		movie.export_pipe = NULL;
+		return;
+	}
+
+	movie.export_frame++;
+	if (movie.export_frame >= movie.export_total) {
+		/* All frames captured — finalize */
+		debug_message("movie_export_capture: %u frames exported\n",
+		              movie.export_frame);
+		movie.export_active = 0;
+		int pclose_ret = pclose(movie.export_pipe);
+		movie.export_pipe = NULL;
+		if (pclose_ret != 0) {
+			warning("movie_export_capture: ffmpeg exited with status %d\n",
+			        pclose_ret);
+		}
+		system->should_exit = 1;
+	}
 }
 
 int movie_export_start(system_header *system, const char *bsm_path, const char *output_path)
@@ -211,13 +235,13 @@ int movie_export_start(system_header *system, const char *bsm_path, const char *
 	/* 2. Initialize headless framebuffer */
 	render_export_init();
 
-	/* 3. Detect framerate from header */
+	/* 3. Detect framerate and PAL from header */
 	int fps = (movie.header.flags & BSM_FLAG_PAL) ? 50 : 60;
+	int is_pal = (movie.header.flags & BSM_FLAG_PAL) != 0;
 
 	/* 4. Detect visible resolution from VDP registers (restored by deserialize).
 	 * Do NOT use derived fields like output_lines which are 0 until first render. */
 	int is_h40 = gen->vdp->regs[REG_MODE_2] & BIT_H40;
-	int is_pal = movie.header.flags & BSM_FLAG_PAL;
 	uint32_t vis_width  = is_h40 ? 320 : 256;
 	uint32_t vis_height = is_pal ? 240 : 224;
 
@@ -239,18 +263,17 @@ int movie_export_start(system_header *system, const char *bsm_path, const char *
 		return -1;
 	}
 
-	/* 6. Headless export loop */
-	int ret = movie_export_loop(system, pipe_out);
+	/* 6. Set up export state — frames will be captured by
+	 *    movie_export_capture() called from render_framebuffer_updated. */
+	movie.export_pipe   = pipe_out;
+	movie.export_frame  = 0;
+	movie.export_total  = movie.header.frame_count;
+	movie.export_active = 1;
+	movie.export_pal    = is_pal;
 
-	/* 7. Close pipe */
-	int pclose_ret = pclose(pipe_out);
-	if (pclose_ret != 0) {
-		warning("movie_export_start: ffmpeg exited with status %d\n", pclose_ret);
-		if (ret == 0) ret = -1;
-	}
-
-	movie_play_stop();
-	return ret;
+	debug_message("movie_export_start: exporting %u frames (%dx%d, %d fps)\n",
+	              movie.export_total, vis_width, vis_height, fps);
+	return 0;
 }
 
 /* ---- Public API ---- */

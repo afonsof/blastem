@@ -18,6 +18,7 @@
 #include "png.h"
 #include "config.h"
 #include "controller_info.h"
+#include "movie.h"
 
 #ifndef DISABLE_OPENGL
 #ifdef USE_GLES
@@ -2590,6 +2591,11 @@ int frame_queue_len, frame_queue_read, frame_queue_write;
 
 void render_framebuffer_updated(uint8_t which, int width)
 {
+	/* Sub-epic 4: video export hook — capture frames during normal emulation */
+	if (current_system && which <= FRAMEBUFFER_EVEN) {
+		movie_export_capture(current_system, which, width);
+	}
+
 	if (which < FRAMEBUFFER_USER_START && (sync_src == SYNC_AUDIO_THREAD || sync_src == SYNC_EXTERNAL)) {
 		SDL_LockMutex(frame_mutex);
 			while (frame_queue_len == 4) {

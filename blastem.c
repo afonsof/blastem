@@ -756,13 +756,14 @@ int main(int argc, char ** argv)
 		}
 	}
 	if (export_bsm && current_system) {
-		/* Headless mode: export .bsm to MP4 */
+		/* Headless export: set up ffmpeg pipe and export state.
+		 * Frames will be captured by movie_export_capture() during
+		 * normal emulation. */
 		if (movie_export_start(current_system, export_bsm, export_mp4) != 0) {
-			warning("Failed to export movie %s to %s\n", export_bsm, export_mp4);
+			warning("Failed to start movie export %s to %s\n", export_bsm, export_mp4);
 			return 1;
 		}
-		printf("Movie exported to %s\n", export_mp4);
-		return 0;
+		movie_play_pre_inject(current_system);
 	}
 	if (play_file && current_system) {
 		if (movie_play_start(current_system, play_file)) {
