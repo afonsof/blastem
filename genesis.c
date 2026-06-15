@@ -257,6 +257,12 @@ void genesis_deserialize(deserialize_buffer *buf, genesis_context *gen)
 		segacd_context *cd = gen->expansion;
 		segacd_register_section_handlers(cd, buf);
 	}
+#ifndef IS_LIB
+	movie_prepare_for_load();
+	register_section_handler(buf,
+		(section_handler){.fun = movie_unfreeze, .data = gen},
+		SECTION_MOVIE);
+#endif
 	uint8_t tmss_old = gen->tmss;
 	uint8_t old_z80_clock_bit = gen->vdp->test_regs[1] & 1;
 	gen->tmss = 0xFF;
@@ -264,6 +270,9 @@ void genesis_deserialize(deserialize_buffer *buf, genesis_context *gen)
 	{
 		load_section(buf);
 	}
+#ifndef IS_LIB
+	movie_check_after_load();
+#endif
 	if (gen->header.type == SYSTEM_GENESIS && (gen->version_reg & 0xF)) {
 		if (gen->tmss == 0xFF) {
 			//state lacked a TMSS section, assume that the game ROM is mapped in
