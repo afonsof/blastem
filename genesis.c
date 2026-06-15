@@ -22,6 +22,7 @@
 #include "config.h"
 #include "event_log.h"
 #include "paths.h"
+#include "movie.h"
 #define MCLKS_NTSC 53693175
 #define MCLKS_PAL  53203395
 
@@ -595,6 +596,9 @@ static m68k_context *sync_components(m68k_context * context, uint32_t address)
 		gen->last_frame = v_context->frame;
 		event_flush(mclks);
 		gen->last_flush_cycle = mclks;
+#ifndef IS_LIB
+		movie_update(&gen->header);
+#endif
 		if (gen->header.enter_debugger_frames) {
 			if (elapsed >= gen->header.enter_debugger_frames) {
 				gen->header.enter_debugger_frames = 0;
