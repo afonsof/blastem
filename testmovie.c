@@ -327,19 +327,30 @@ static void test_playback_input_buffer_roundtrip(void)
 		assert(frames[i].pad2 == pad2_inputs[i]);
 	}
 
-	/* Phase 3: movie_play_start loads the file, reads header + inputs into RAM */
+	/* Phase 3: movie_play_start loads the file, reads header + inputs into RAM.
+	 * movie_play_pre_inject injects frame 0 BEFORE the first io_run,
+	 * fixing the 1-frame playback offset. */
 	assert(movie_get_state() == BSM_STATE_NONE);
 	r = movie_play_start(&sys, "/tmp/testmovie_pb.bsm");
 	assert(r == 0);
 	assert(movie_get_state() == BSM_STATE_PLAY);
-	assert(movie_get_play_frame() == 0);
 
+	/* Pre-inject frame 0: must be called after movie_play_start */
+	movie_play_pre_inject(&fake_gen.header);
+	assert(movie_get_play_frame() == 1);
+
+	/* Verify frame 0 is already in the pad ports */
+	uint16_t port1_state = io_read_pad_buttons(&fake_gen.io.ports[0]);
+	uint16_t port2_state = io_read_pad_buttons(&fake_gen.io.ports[1]);
+	assert(port1_state == pad1_inputs[0]);
+	assert(port2_state == pad2_inputs[0]);
+
+	/* movie_update injects frames 1..4; on the 5th call
+	 * play_frame reaches frame_count and state flips to NONE */
 	for (int i = 0; i < 5; i++) {
-		assert(movie_get_play_frame() == (uint32_t)i);
+		assert(movie_get_play_frame() == (uint32_t)(i + 1));
 		movie_update(&fake_gen.header);
 	}
-	assert(movie_get_play_frame() == 5);
-	movie_update(&fake_gen.header);
 	assert(movie_get_state() == BSM_STATE_NONE);
 
 	printf("test_playback_input_buffer_roundtrip: PASSED\n");

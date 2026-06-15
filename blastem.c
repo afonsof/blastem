@@ -747,6 +747,8 @@ int main(int argc, char ** argv)
 		if (movie_play_start(current_system, play_file)) {
 			warning("Failed to start movie playback from %s\n", play_file);
 			play_file = NULL;
+		} else {
+			movie_play_pre_inject(current_system);
 		}
 	}
 	current_system->start_context(current_system,  menu ? NULL : statefile);

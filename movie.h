@@ -106,6 +106,12 @@ void movie_play_stop(void);
 /* Returns the index of the next frame to inject (0 when not playing). */
 uint32_t movie_get_play_frame(void);
 
+/* Called immediately after movie_play_start to pre-inject frame 0's input
+ * into the genesis io ports. Fixes the 1-frame playback offset caused by
+ * movie_update being called at the end of each frame (after io_run).
+ * Must only be called when movie.state == BSM_STATE_PLAY && frame_count > 0. */
+void movie_play_pre_inject(system_header *system);
+
 /* ---- Video export (sub-epic 4) ---- */
 
 /* Converte framebuffer ARGB8888 para RGB24 e escreve no pipe.
@@ -113,5 +119,10 @@ uint32_t movie_get_play_frame(void);
  * Retorna 0 em sucesso, -1 em erro de escrita. */
 int movie_export_write_frame(pixel_t *fb, int pitch,
                              uint32_t vis_width, uint32_t vis_height, FILE *out);
+
+/* Exporta um .bsm para video MP4 via ffmpeg CLI (pipe).
+ * Requer ffmpeg no PATH. Roda o emulador em modo headless.
+ * Retorna 0 em sucesso, nao-zero em erro. */
+int movie_export_start(system_header *system, const char *bsm_path, const char *output_path);
 
 #endif /* MOVIE_H_ */

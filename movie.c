@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <errno.h>
 #ifndef _WIN32
 #include <unistd.h>
 #endif
@@ -14,6 +15,7 @@
 #include "zlib/zlib.h"
 #include "util.h"
 #include "vdp.h"
+#include "render.h"
 
 _Static_assert(sizeof(bsm_header) == BSM_HEADER_SIZE,
                "bsm_header layout changed — file format broken");
@@ -155,6 +157,97 @@ int movie_export_write_frame(pixel_t *fb, int pitch,
 	return 0;
 }
 
+/* Executa o loop headless de exportacao.
+ * Avanca a maquina frame a frame, captura o framebuffer VDP
+ * e escreve cada frame convertido no pipe do ffmpeg. */
+static int movie_export_loop(system_header *system, FILE *pipe_out)
+{
+	genesis_context *gen = (genesis_context *)system;
+	int is_h40 = gen->vdp->h40_lines > gen->vdp->output_lines / 2;
+	uint32_t vis_width  = is_h40 ? 320 : 256;
+	uint32_t vis_height = gen->vdp->output_lines;
+
+	for (uint32_t f = 0; f < movie.header.frame_count; f++) {
+		/* Run one frame of emulation.
+		 * resume_context advances the machine by one "quantum"
+		 * (typically one frame). movie_update is hooked inside
+		 * the normal flow and injects recorded inputs. */
+		system->resume_context(system);
+
+		/* Ensure VDP has finished the current framebuffer */
+		vdp_force_update_framebuffer(gen->vdp);
+
+		/* Capture framebuffer */
+		int pitch;
+		pixel_t *fb = render_export_get_fb(&pitch);
+		if (!fb) {
+			warning("movie_export_loop: failed to get framebuffer at frame %u\n", f);
+			return -1;
+		}
+
+		/* Convert and write to ffmpeg pipe */
+		if (movie_export_write_frame(fb, pitch, vis_width, vis_height, pipe_out) != 0) {
+			warning("movie_export_loop: write failed at frame %u\n", f);
+			return -1;
+		}
+	}
+
+	return 0;
+}
+
+int movie_export_start(system_header *system, const char *bsm_path, const char *output_path)
+{
+	/* 1. Start playback (sub-epic 3) */
+	if (movie_play_start(system, bsm_path) != 0) {
+		warning("movie_export_start: failed to open %s for playback\n", bsm_path);
+		return -1;
+	}
+
+	genesis_context *gen = (genesis_context *)system;
+
+	/* 2. Initialize headless framebuffer */
+	render_export_init();
+
+	/* 3. Detect framerate from header */
+	int fps = (movie.header.flags & BSM_FLAG_PAL) ? 50 : 60;
+
+	/* 4. Detect visible resolution */
+	int is_h40 = gen->vdp->h40_lines > gen->vdp->output_lines / 2;
+	uint32_t vis_width  = is_h40 ? 320 : 256;
+	uint32_t vis_height = gen->vdp->output_lines;
+
+	/* 5. Open ffmpeg pipe */
+	char cmd[1024];
+	snprintf(cmd, sizeof(cmd),
+		"ffmpeg -y -f rawvideo -vcodec rawvideo "
+		"-s %dx%d -r %d -pix_fmt rgb24 -i pipe:0 "
+		"-c:v libx264 -preset medium -crf 18 -pix_fmt yuv420p \"%s\"",
+		vis_width, vis_height, fps, output_path);
+
+	debug_message("movie_export_start: %s\n", cmd);
+
+	FILE *pipe_out = popen(cmd, "w");
+	if (!pipe_out) {
+		warning("movie_export_start: ffmpeg not found or failed to start: %s\n",
+		        strerror(errno));
+		movie_play_stop();
+		return -1;
+	}
+
+	/* 6. Headless export loop */
+	int ret = movie_export_loop(system, pipe_out);
+
+	/* 7. Close pipe */
+	int pclose_ret = pclose(pipe_out);
+	if (pclose_ret != 0) {
+		warning("movie_export_start: ffmpeg exited with status %d\n", pclose_ret);
+		if (ret == 0) ret = -1;
+	}
+
+	movie_play_stop();
+	return ret;
+}
+
 /* ---- Public API ---- */
 
 bsm_state movie_get_state(void)
@@ -174,6 +267,23 @@ void movie_play_stop(void)
 	movie.state      = BSM_STATE_NONE;
 	movie.play_frame = 0;
 	debug_message("Movie playback stopped\n");
+}
+
+void movie_play_pre_inject(system_header *system)
+{
+	if (movie.state != BSM_STATE_PLAY || movie.header.frame_count == 0)
+		return;
+	if (system->type != SYSTEM_GENESIS && system->type != SYSTEM_SEGACD)
+		return;
+
+	genesis_context *gen = (genesis_context *)system;
+	bsm_frame_input *frame0 = &movie.input_buffer[0];
+	io_port *port1 = find_gamepad(&gen->io, 1);
+	io_port *port2 = find_gamepad(&gen->io, 2);
+	if (port1) io_port_set_pad_state(port1, frame0->pad1);
+	if (port2) io_port_set_pad_state(port2, frame0->pad2);
+
+	movie.play_frame = 1;  /* frame 0 already injected, next is frame 1 */
 }
 
 int movie_play_start(system_header *system, const char *filename)
