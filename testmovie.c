@@ -9,6 +9,7 @@
 
 static uint8_t *fake_serialize(system_header *s, size_t *sz)
 {
+	(void)s;
 	*sz = 16;
 	uint8_t *ret = malloc(16);
 	memset(ret, 0, 16);

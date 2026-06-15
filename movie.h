@@ -7,6 +7,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include "system.h"
+#include "serialize.h"
 
 /* ---- File format constants ---- */
 #define BSM_MAGIC            0x1a4d5342u  /* "BSM\x1a" little-endian */
