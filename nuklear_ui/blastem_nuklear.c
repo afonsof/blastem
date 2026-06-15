@@ -22,6 +22,7 @@
 #include "../controller_info.h"
 #include "../bindings.h"
 #include "../mediaplayer.h"
+#include "../movie.h"
 
 static struct nk_context *context;
 static struct rawfb_context *fb_context;
@@ -2562,10 +2563,148 @@ void exit_handler(uint32_t index)
 	exit(0);
 }
 
+static char record_path[1024];
+static char *record_browser_dir;
+
+static void record_start(const char *path)
+{
+	if (!current_system) return;
+	strncpy(record_path, path, sizeof(record_path) - 1);
+	record_path[sizeof(record_path) - 1] = 0;
+	if (movie_record_start(current_system, record_path) == 0) {
+		free(record_browser_dir);
+		record_browser_dir = NULL;
+		show_play_view();
+	} else {
+		warning("Failed to start recording to %s\n", record_path);
+	}
+}
+
+static void view_record_movie(struct nk_context *context)
+{
+	if (movie_get_state() == BSM_STATE_RECORD) {
+		/* Recording active - show stop button */
+		if (nk_begin(context, "Record Movie",
+		    nk_rect(0, 0, render_width(), render_height()), 0)) {
+			nk_layout_row_dynamic(context, context->style.font->height * 2, 1);
+			nk_label(context, "Recording in progress...", NK_TEXT_CENTERED);
+
+			nk_layout_row_dynamic(context, context->style.font->height * 1.75, 1);
+			if (nk_button_label(context, "Stop Recording")) {
+				movie_record_stop();
+				show_play_view();
+			}
+
+			nk_layout_row_dynamic(context, context->style.font->height * 1.75, 1);
+			if (nk_button_label(context, "Back")) {
+				pop_view();
+			}
+			nk_end(context);
+		}
+		return;
+	}
+
+	/* Not recording - file browser to choose save path */
+	static dir_entry *entries;
+	static size_t num_entries;
+	static int32_t selected_entry = -1;
+
+	if (!record_browser_dir) {
+		record_browser_dir = strdup(".");
+	}
+	if (!entries) {
+		entries = get_dir_list(record_browser_dir, &num_entries);
+		if (entries) {
+			/* sort: dirs first, then files */
+			for (size_t i = 0; i < num_entries; i++) {
+				for (size_t j = i + 1; j < num_entries; j++) {
+					if ((entries[i].is_dir && !entries[j].is_dir)
+					    || (entries[i].is_dir == entries[j].is_dir
+					        && strcmp(entries[i].name, entries[j].name) > 0)) {
+						dir_entry tmp = entries[i];
+						entries[i] = entries[j];
+						entries[j] = tmp;
+					}
+				}
+			}
+		}
+		if (!num_entries) {
+			free_dir_list(entries, num_entries);
+			entries = calloc(1, sizeof(dir_entry));
+			entries[0].name = strdup("..");
+			entries[0].is_dir = 1;
+			num_entries = 1;
+		}
+	}
+
+	uint32_t width = render_width();
+	uint32_t height = render_height();
+
+	if (nk_begin(context, "Record Movie - Choose File",
+	    nk_rect(0, 0, width, height), 0)) {
+		nk_layout_row_static(context, height - context->style.font->height * 3,
+			width - 60, 1);
+		int32_t old_selected = selected_entry;
+		char *title = alloc_concat(record_browser_dir, "");
+		if (nk_group_begin(context, title, NK_WINDOW_BORDER | NK_WINDOW_TITLE)) {
+			nk_layout_row_static(context, context->style.font->height - 2,
+				width - 100, 1);
+			for (int32_t i = 0; i < (int32_t)num_entries; i++) {
+				/* Filter: show dirs, "..", and .bsm files only */
+				if (!entries[i].is_dir
+				    && entries[i].name[0] != '.'
+				    && !strstr(entries[i].name, ".bsm")) {
+					continue;
+				}
+				if (nk_button_label(context, entries[i].name)) {
+					selected_entry = i;
+				}
+			}
+			nk_group_end(context);
+		}
+		free(title);
+
+		nk_layout_row_dynamic(context, context->style.font->height * 1.75, 2);
+		if (nk_button_label(context, "Back")) {
+			free_dir_list(entries, num_entries);
+			entries = NULL;
+			free(record_browser_dir);
+			record_browser_dir = NULL;
+			pop_view();
+		}
+		if (nk_button_label(context, "Record")
+		    || (old_selected >= 0 && selected_entry < 0)) {
+			if (selected_entry >= 0) {
+				if (entries[selected_entry].is_dir) {
+					/* Navigate into directory */
+					char *new_dir = path_append(record_browser_dir,
+						entries[selected_entry].name);
+					free(record_browser_dir);
+					record_browser_dir = new_dir;
+					free_dir_list(entries, num_entries);
+					entries = NULL;
+					selected_entry = -1;
+				} else {
+					/* Start recording */
+					char *path = path_append(record_browser_dir,
+						entries[selected_entry].name);
+					record_start(path);
+					free(path);
+					free_dir_list(entries, num_entries);
+					entries = NULL;
+				}
+			}
+		}
+		old_selected = selected_entry;
+		nk_end(context);
+	}
+}
+
 void view_pause(struct nk_context *context)
 {
 	static menu_item items[] = {
 		{"Resume", view_play},
+		{"Record Movie", view_record_movie},
 		{"Load ROM", view_load},
 		{"Lock On", view_lock_on},
 		{"Save State", view_save_state},
@@ -2577,6 +2716,7 @@ void view_pause(struct nk_context *context)
 	};
 	static menu_item sc3k_items[] = {
 		{"Resume", view_play},
+		{"Record Movie", view_record_movie},
 		{"Load ROM", view_load},
 		{"Load Tape", view_load_tape},
 		{"Save State", view_save_state},
