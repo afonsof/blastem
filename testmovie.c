@@ -5,6 +5,7 @@
 #include <assert.h>
 #include "movie.h"
 #include "genesis.h"   /* for SYSTEM_GENESIS */
+#include "vdp.h"       /* for BORDER_LEFT */
 #include "serialize.h" /* for init_serialize, serialize_buffer */
 
 /* Stubs for util.c dependencies */
@@ -214,6 +215,70 @@ static void test_io_port_set_pad_state(void)
 	printf("test_io_port_set_pad_state: PASSED\n");
 }
 
+static void test_export_frame_write(void)
+{
+	const int w = 4, h = 4;
+	/* pitch must accommodate BORDER_LEFT + w pixels per row */
+	const int pitch = (BORDER_LEFT + w) * (int)sizeof(pixel_t);
+	/* fb must be large enough for h rows at full pitch */
+	pixel_t fb[(BORDER_LEFT + w) * h];
+
+	/* Zero the whole buffer first (border area + visible area) */
+	memset(fb, 0, sizeof(fb));
+
+	/* Fill visible area only (skip BORDER_LEFT columns) */
+	uint32_t colors[4] = {
+		0xFFFF0000u, /* red */
+		0xFF00FF00u, /* green */
+		0xFF0000FFu, /* blue */
+		0xFF000000u, /* black */
+	};
+	for (int y = 0; y < h; y++) {
+		for (int x = 0; x < w; x++) {
+			fb[y * (BORDER_LEFT + w) + BORDER_LEFT + x] = colors[y];
+		}
+	}
+
+	FILE *f = tmpfile();
+	assert(f != NULL);
+
+	int ret = movie_export_write_frame(fb, pitch, w, h, f);
+	assert(ret == 0);
+
+	rewind(f);
+	uint8_t rgb[48];
+	size_t nread = fread(rgb, 1, sizeof(rgb), f);
+	assert(nread == 48);
+	fclose(f);
+
+	/* Row 0: red */
+	for (int x = 0; x < w; x++) {
+		assert(rgb[0 * 12 + x * 3 + 0] == 0xFF);
+		assert(rgb[0 * 12 + x * 3 + 1] == 0x00);
+		assert(rgb[0 * 12 + x * 3 + 2] == 0x00);
+	}
+	/* Row 1: green */
+	for (int x = 0; x < w; x++) {
+		assert(rgb[1 * 12 + x * 3 + 0] == 0x00);
+		assert(rgb[1 * 12 + x * 3 + 1] == 0xFF);
+		assert(rgb[1 * 12 + x * 3 + 2] == 0x00);
+	}
+	/* Row 2: blue */
+	for (int x = 0; x < w; x++) {
+		assert(rgb[2 * 12 + x * 3 + 0] == 0x00);
+		assert(rgb[2 * 12 + x * 3 + 1] == 0x00);
+		assert(rgb[2 * 12 + x * 3 + 2] == 0xFF);
+	}
+	/* Row 3: black */
+	for (int x = 0; x < w; x++) {
+		assert(rgb[3 * 12 + x * 3 + 0] == 0x00);
+		assert(rgb[3 * 12 + x * 3 + 1] == 0x00);
+		assert(rgb[3 * 12 + x * 3 + 2] == 0x00);
+	}
+
+	printf("test_export_frame_write: PASSED\n");
+}
+
 static void test_playback_input_buffer_roundtrip(void)
 {
 	/* Phase 1: record 5 frames with known input patterns to a temp file */
@@ -290,6 +355,7 @@ int main(void)
 	test_freeze_unfreeze_roundtrip();
 	test_io_port_set_pad_state();
 	test_playback_input_buffer_roundtrip();
+	test_export_frame_write();
 	printf("All tests passed.\n");
 	return 0;
 }
