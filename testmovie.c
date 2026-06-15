@@ -4,6 +4,28 @@
 #include <string.h>
 #include <assert.h>
 #include "movie.h"
+#include "genesis.h"   /* for SYSTEM_GENESIS */
+#include "serialize.h" /* for init_serialize, serialize_buffer */
+
+static uint8_t *fake_serialize(system_header *s, size_t *sz)
+{
+	*sz = 16;
+	uint8_t *ret = malloc(16);
+	memset(ret, 0, 16);
+	return ret;
+}
+
+static system_header make_fake_system(void)
+{
+	static uint8_t fake_rom[1] = {0};
+	system_header s;
+	memset(&s, 0, sizeof(s));
+	s.serialize     = fake_serialize;
+	s.info.rom      = fake_rom;
+	s.info.rom_size = 1;
+	s.type          = SYSTEM_GENESIS;
+	return s;
+}
 
 static void test_header_roundtrip(void)
 {
@@ -70,10 +92,62 @@ static void test_bad_magic(void)
 	printf("test_bad_magic: PASSED\n");
 }
 
+/* Testa que movie_check_after_load é no-op quando não está gravando */
+static void test_check_noop_when_not_recording(void)
+{
+	assert(movie_get_state() == BSM_STATE_NONE);
+	movie_prepare_for_load();
+	movie_check_after_load(); /* não deve travar nem mudar estado */
+	assert(movie_get_state() == BSM_STATE_NONE);
+	printf("test_check_noop_when_not_recording: PASSED\n");
+}
+
+/* Testa que carregar state sem SECTION_MOVIE para a gravação */
+static void test_stop_on_missing_section(void)
+{
+	system_header sys = make_fake_system();
+	int r = movie_record_start(&sys, "/tmp/testmovie_stop.bsm");
+	assert(r == 0);
+	assert(movie_get_state() == BSM_STATE_RECORD);
+
+	movie_prepare_for_load();
+	/* Não chamamos movie_unfreeze — simula save state sem SECTION_MOVIE */
+	movie_check_after_load();
+
+	assert(movie_get_state() == BSM_STATE_NONE);
+	printf("test_stop_on_missing_section: PASSED\n");
+}
+
+/* Testa que movie_freeze escreve algo na serialize_buffer quando gravando */
+static void test_freeze_writes_section(void)
+{
+	system_header sys = make_fake_system();
+	int r = movie_record_start(&sys, "/tmp/testmovie_freeze.bsm");
+	assert(r == 0);
+
+	serialize_buffer sbuf;
+	init_serialize(&sbuf);
+	size_t size_before = sbuf.size;
+
+	movie_freeze(&sbuf);
+
+	assert(sbuf.size > size_before); /* algo foi escrito */
+	/* Os primeiros 2 bytes devem ser SECTION_MOVIE (=24) big-endian */
+	uint16_t section_id = (uint16_t)((sbuf.data[0] << 8) | sbuf.data[1]);
+	assert(section_id == SECTION_MOVIE);
+
+	movie_record_stop();
+	free(sbuf.data);
+	printf("test_freeze_writes_section: PASSED\n");
+}
+
 int main(void)
 {
 	test_header_roundtrip();
 	test_bad_magic();
+	test_check_noop_when_not_recording();
+	test_stop_on_missing_section();
+	test_freeze_writes_section();
 	printf("All tests passed.\n");
 	return 0;
 }
