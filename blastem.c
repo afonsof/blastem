@@ -423,6 +423,8 @@ int main(int argc, char ** argv)
 	char *port;
 	char *record_file = NULL;
 	char *play_file = NULL;
+	char *export_bsm = NULL;
+	char *export_mp4 = NULL;
 	for (int i = 1; i < argc; i++) {
 		if (argv[i][0] == '-') {
 			switch(argv[i][1]) {
@@ -497,6 +499,15 @@ int main(int argc, char ** argv)
 					fatal_error("-P must be followed by a movie filename\n");
 				}
 				play_file = argv[i];
+				break;
+			case '-':
+				/* --long options */
+				if (strcmp(argv[i] + 2, "export-movie") == 0 && i + 2 < argc) {
+					export_bsm = argv[++i];
+					export_mp4 = argv[++i];
+					continue;
+				}
+				fatal_error("Unrecognized switch %s\n", argv[i]);
 				break;
 			case 'm':
 				i++;
@@ -590,6 +601,7 @@ int main(int argc, char ** argv)
 					"   -e FILE     Write hardware event log to FILE\n"
 					"	-R FILE     Record gameplay to FILE in .bsm format\n"
 					"\t-P FILE     Play back gameplay from FILE in .bsm format\n"
+					"	--export-movie BSM OUT  Export .bsm to MP4 via ffmpeg (headless)\n"
 				);
 				return 0;
 			default:
@@ -742,6 +754,15 @@ int main(int argc, char ** argv)
 			warning("Failed to start movie recording to %s\n", record_file);
 			record_file = NULL;
 		}
+	}
+	if (export_bsm && current_system) {
+		/* Headless mode: export .bsm to MP4 */
+		if (movie_export_start(current_system, export_bsm, export_mp4) != 0) {
+			warning("Failed to export movie %s to %s\n", export_bsm, export_mp4);
+			return 1;
+		}
+		printf("Movie exported to %s\n", export_mp4);
+		return 0;
 	}
 	if (play_file && current_system) {
 		if (movie_play_start(current_system, play_file)) {

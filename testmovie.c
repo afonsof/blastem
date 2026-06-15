@@ -215,6 +215,53 @@ static void test_io_port_set_pad_state(void)
 	printf("test_io_port_set_pad_state: PASSED\n");
 }
 
+static void test_export_pipe(void)
+{
+	/* Check if ffmpeg is available */
+	FILE *check = popen("ffmpeg -version 2>/dev/null", "r");
+	if (!check) {
+		printf("test_export_pipe: SKIP (ffmpeg not found)\n");
+		return;
+	}
+	pclose(check);
+
+	/* Create a synthetic .bsm with 5 frames */
+	system_header sys = make_fake_system();
+	int r = movie_record_start(&sys, "/tmp/testmovie_export.bsm");
+	assert(r == 0);
+
+	genesis_context fake_gen;
+	memset(&fake_gen, 0, sizeof(fake_gen));
+	fake_gen.header.type = SYSTEM_GENESIS;
+	fake_gen.io.ports[0].device_type = IO_GAMEPAD6;
+	fake_gen.io.ports[0].device.pad.gamepad_num = 1;
+	fake_gen.io.ports[1].device_type = IO_GAMEPAD6;
+	fake_gen.io.ports[1].device.pad.gamepad_num = 2;
+
+	uint16_t pad1_inputs[5] = {0x0001, 0x0003, 0x0007, 0x000F, 0x001F};
+	uint16_t pad2_inputs[5] = {0x0010, 0x0030, 0x0070, 0x00F0, 0x01F0};
+
+	for (int i = 0; i < 5; i++) {
+		io_port_set_pad_state(&fake_gen.io.ports[0], pad1_inputs[i]);
+		io_port_set_pad_state(&fake_gen.io.ports[1], pad2_inputs[i]);
+		movie_update(&fake_gen.header);
+	}
+	movie_record_stop();
+
+	/* Verify the .bsm file was created and has correct frame count */
+	FILE *f = fopen("/tmp/testmovie_export.bsm", "rb");
+	assert(f != NULL);
+	bsm_header h;
+	r = bsm_read_header(f, &h);
+	assert(r == 0);
+	assert(h.frame_count == 5);
+	fclose(f);
+
+	/* Cleanup */
+	remove("/tmp/testmovie_export.bsm");
+	printf("test_export_pipe: PASSED\n");
+}
+
 static void test_export_frame_write(void)
 {
 	const int w = 4, h = 4;
@@ -367,6 +414,7 @@ int main(void)
 	test_io_port_set_pad_state();
 	test_playback_input_buffer_roundtrip();
 	test_export_frame_write();
+	test_export_pipe();
 	printf("All tests passed.\n");
 	return 0;
 }
