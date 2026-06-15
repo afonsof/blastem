@@ -222,6 +222,8 @@ void movie_export_capture(system_header *system, uint8_t which, int width)
 			warning("movie_export_capture: ffmpeg exited with status %d\n",
 			        pclose_ret);
 		}
+		/* Stop the Genesis emulation loop and request exit */
+		gen->m68k->should_return = 1;
 		system->should_exit = 1;
 	}
 }
