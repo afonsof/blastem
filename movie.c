@@ -83,9 +83,135 @@ int bsm_read_header(FILE *f, bsm_header *h)
 	return 0;
 }
 
-/* ---- Recording state stubs (completed in Task 4) ---- */
+/* ---- Internal state ---- */
 
-bsm_state movie_get_state(void) { return BSM_STATE_NONE; }
-int  movie_record_start(system_header *system, const char *filename) { (void)system; (void)filename; return -1; }
-void movie_record_stop(void) {}
-void movie_update(system_header *system) { (void)system; }
+typedef struct {
+	bsm_state        state;
+	FILE             *file;
+	bsm_header       header;
+	bsm_frame_input  *input_buffer;
+	uint32_t         input_buffer_cap;  /* allocated slots */
+	uint32_t         input_buffer_used; /* filled slots since last flush */
+} bsm_movie;
+
+static bsm_movie movie;
+
+/* ---- Internal helpers ---- */
+
+static void flush_inputs(void)
+{
+	if (!movie.file || !movie.input_buffer_used) {
+		return;
+	}
+	fseek(movie.file, movie.header.input_offset +
+	      (movie.header.frame_count - movie.input_buffer_used) * sizeof(bsm_frame_input),
+	      SEEK_SET);
+	fwrite(movie.input_buffer, sizeof(bsm_frame_input), movie.input_buffer_used, movie.file);
+	movie.input_buffer_used = 0;
+}
+
+/* ---- Public API ---- */
+
+bsm_state movie_get_state(void)
+{
+	return movie.state;
+}
+
+int movie_record_start(system_header *system, const char *filename)
+{
+	if (movie.state != BSM_STATE_NONE) {
+		movie_record_stop();
+	}
+
+	FILE *f = fopen(filename, "wb");
+	if (!f) {
+		warning("movie_record_start: failed to open %s\n", filename);
+		return -1;
+	}
+
+	/* Serialize current machine state */
+	size_t state_size = 0;
+	uint8_t *state_data = system->serialize(system, &state_size);
+	if (!state_data || !state_size) {
+		warning("movie_record_start: serialize failed\n");
+		fclose(f);
+		return -1;
+	}
+
+	/* Compute ROM CRC32 */
+	uint32_t rom_crc = (uint32_t)crc32(0, (const Bytef *)system->info.rom, system->info.rom_size);
+
+	/* Build header */
+	memset(&movie.header, 0, sizeof(movie.header));
+	movie.header.magic            = BSM_MAGIC;
+	movie.header.version          = BSM_VERSION;
+	movie.header.movie_id         = (uint32_t)time(NULL);
+	movie.header.rerecord_count   = 0;
+	movie.header.frame_count      = 0;
+	movie.header.flags            = 0;
+	movie.header.pad_mask         = 0x03; /* pad1 and pad2 */
+	movie.header.rom_crc32        = rom_crc;
+	if (system->info.name) {
+		strncpy(movie.header.rom_name, system->info.name, sizeof(movie.header.rom_name) - 1);
+	}
+	movie.header.savestate_offset = BSM_HEADER_SIZE;
+	movie.header.input_offset     = BSM_HEADER_SIZE + 4 + (uint32_t)state_size;
+
+	/* Write header (placeholder — will be rewritten on stop) */
+	bsm_write_header(f, &movie.header);
+
+	/* Write save state: 4-byte size prefix + raw data */
+	uint32_t ss_size = (uint32_t)state_size;
+	fwrite(&ss_size, 4, 1, f);
+	fwrite(state_data, 1, state_size, f);
+	free(state_data);
+
+	/* Allocate input buffer */
+	if (!movie.input_buffer) {
+		movie.input_buffer     = malloc(BSM_INPUT_FLUSH_FRAMES * sizeof(bsm_frame_input));
+		movie.input_buffer_cap = BSM_INPUT_FLUSH_FRAMES;
+	}
+	movie.input_buffer_used = 0;
+
+	movie.file  = f;
+	movie.state = BSM_STATE_RECORD;
+
+	debug_message("Movie recording started: %s\n", filename);
+	return 0;
+}
+
+void movie_record_stop(void)
+{
+	if (movie.state != BSM_STATE_RECORD || !movie.file) {
+		return;
+	}
+	flush_inputs();
+	/* Rewrite header with final frame_count */
+	bsm_write_header(movie.file, &movie.header);
+	fclose(movie.file);
+	movie.file  = NULL;
+	movie.state = BSM_STATE_NONE;
+	debug_message("Movie recording stopped. Frames: %u\n", movie.header.frame_count);
+}
+
+void movie_update(system_header *system)
+{
+	if (movie.state != BSM_STATE_RECORD) {
+		return;
+	}
+
+	genesis_context *gen = (genesis_context *)system;
+	io_port *port1 = find_gamepad(&gen->io, 1);
+	io_port *port2 = find_gamepad(&gen->io, 2);
+
+	bsm_frame_input frame;
+	frame.pad1 = port1 ? io_read_pad_buttons(port1) : 0;
+	frame.pad2 = port2 ? io_read_pad_buttons(port2) : 0;
+
+	movie.input_buffer[movie.input_buffer_used++] = frame;
+	movie.header.frame_count++;
+
+	if (movie.input_buffer_used >= movie.input_buffer_cap) {
+		flush_inputs();
+	}
+}
