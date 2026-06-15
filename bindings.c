@@ -11,6 +11,7 @@
 #include "menu.h"
 #include "bindings.h"
 #include "controller_info.h"
+#include "movie.h"
 #ifndef DISABLE_NUKLEAR
 #include "nuklear_ui/blastem_nuklear.h"
 #endif
@@ -41,6 +42,7 @@ typedef enum {
 	UI_SCREENSHOT_SEQUENCE,
 	UI_RECORD_VIDEO,
 	UI_VGM_LOG,
+	UI_MOVIE_RECORD,
 	UI_MENU,
 	UI_EXIT,
 	UI_PLANE_DEBUG,
@@ -465,6 +467,21 @@ void handle_binding_up(keybinding * binding)
 				}
 			}
 			break;
+		case UI_MOVIE_RECORD:
+			if (allow_content_binds) {
+				if (movie_get_state() == BSM_STATE_RECORD) {
+					movie_record_stop();
+				} else {
+					char *path = get_content_config_path(
+						"ui\0movie_path\0",
+						"ui\0movie_template\0",
+						"blastem_%c.bsm"
+					);
+					movie_record_start(current_system, path);
+					free(path);
+				}
+			}
+			break;
 		case UI_MENU:
 #ifndef DISABLE_NUKLEAR
 			if (is_nuklear_active()) {
@@ -767,6 +784,8 @@ int parse_binding_target(int device_num, const char * target, tern_node * padbut
 			*subtype_a = UI_RECORD_VIDEO;
 		} else if (!strcmp(target + 3, "vgm_log")) {
 			*subtype_a = UI_VGM_LOG;
+		} else if (!strcmp(target + 3, "movie_record")) {
+			*subtype_a = UI_MOVIE_RECORD;
 		} else if(!strcmp(target + 3, "menu")) {
 			*subtype_a = UI_MENU;
 		} else if(!strcmp(target + 3, "exit")) {
