@@ -74,4 +74,20 @@ bsm_state movie_get_state(void);
 void bsm_write_header(FILE *f, const bsm_header *h);
 int  bsm_read_header(FILE *f, bsm_header *h);   /* returns 0 ok, -1 bad magic/version */
 
+/* ---- Re-recording (sub-epic 2) ---- */
+
+/* Chamado ao final de genesis_serialize: embute movie state em SECTION_MOVIE.
+ * No-op se não estiver gravando. */
+void movie_freeze(serialize_buffer *buf);
+
+/* Handler para SECTION_MOVIE em genesis_deserialize: trunca timeline ao frame salvo.
+ * Se gravando e seção ausente: movie_check_after_load() para a gravação. */
+void movie_unfreeze(deserialize_buffer *buf, void *vgen);
+
+/* Chamar ANTES de cada genesis_deserialize para resetar a flag de detecção. */
+void movie_prepare_for_load(void);
+
+/* Chamar APÓS genesis_deserialize: para gravação se SECTION_MOVIE não apareceu. */
+void movie_check_after_load(void);
+
 #endif /* MOVIE_H_ */
