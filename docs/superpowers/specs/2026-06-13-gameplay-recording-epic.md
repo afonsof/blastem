@@ -17,6 +17,14 @@ O sistema deve integrar-se ao mecanismo de save states existente, de modo que ca
 
 ---
 
+## Projeto de Referência
+
+**Snes9x** (`/Users/afonsof/Projects/retro/snes9x`) é o benchmark técnico deste épico.
+
+> Sempre que houver dúvida de design ou implementação — formato de arquivo, integração com save states, re-recording, export de vídeo — **consultar primeiro o Snes9x** antes de inventar uma solução própria. Em particular: `movie.cpp`, `snapshot.cpp` e `win32/AVIOutput.h`.
+
+---
+
 ## Referência Técnica
 
 O Snes9x (formato `.smv`, `movie.cpp`) foi usado como referência principal. Pontos relevantes observados:
