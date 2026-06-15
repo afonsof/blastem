@@ -147,6 +147,39 @@ static void test_freeze_writes_section(void)
 	printf("test_freeze_writes_section: PASSED\n");
 }
 
+static void test_freeze_unfreeze_roundtrip(void)
+{
+	system_header sys = make_fake_system();
+	int r = movie_record_start(&sys, "testmovie_roundtrip.bsm");
+	assert(r == 0);
+
+	/* Freeze the initial state (0 frames) */
+	serialize_buffer sbuf;
+	init_serialize(&sbuf);
+	movie_freeze(&sbuf);
+	assert(sbuf.size > 0);
+
+	/* Build a deserialize_buffer from the frozen data and unfreeze */
+	deserialize_buffer dbuf;
+	init_deserialize(&dbuf, sbuf.data, sbuf.size);
+	/* register_section_handler doubles max_handler once per call (init: 8→16).
+	 * SECTION_MOVIE=24 > 16 would be OOB. Pre-register at 16 to grow to 32 first. */
+	register_section_handler(&dbuf, (section_handler){0}, 16);
+	register_section_handler(&dbuf,
+		(section_handler){.fun = movie_unfreeze, .data = NULL},
+		SECTION_MOVIE);
+	movie_prepare_for_load();
+	load_section(&dbuf);
+	movie_check_after_load();
+
+	/* Should still be recording (SECTION_MOVIE was present) */
+	assert(movie_get_state() == BSM_STATE_RECORD);
+
+	movie_record_stop();
+	free(sbuf.data);
+	printf("test_freeze_unfreeze_roundtrip: PASSED\n");
+}
+
 int main(void)
 {
 	test_header_roundtrip();
@@ -154,6 +187,7 @@ int main(void)
 	test_check_noop_when_not_recording();
 	test_stop_on_missing_section();
 	test_freeze_writes_section();
+	test_freeze_unfreeze_roundtrip();
 	printf("All tests passed.\n");
 	return 0;
 }

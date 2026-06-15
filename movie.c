@@ -272,6 +272,7 @@ void movie_freeze(serialize_buffer *buf)
 
 void movie_unfreeze(deserialize_buffer *buf, void *vgen)
 {
+	(void)vgen;
 	uint32_t saved_frame_count = load_int32(buf);
 	uint32_t saved_buffer_used = load_int32(buf);
 
@@ -288,10 +289,14 @@ void movie_unfreeze(deserialize_buffer *buf, void *vgen)
 	load_buffer8(buf, (uint8_t *)movie.input_buffer,
 	             saved_buffer_used * sizeof(bsm_frame_input));
 
-	/* Flush pending buffer before truncating the file */
+	/* Update counters BEFORE flush so flush seeks to the correct position */
+	movie.input_buffer_used  = saved_buffer_used;
+	movie.header.frame_count = saved_frame_count;
+
+	/* Flush the restored buffer to disk at the correct position */
 	flush_inputs();
 
-	/* Truncate .bsm on disk to the save state's frame position */
+	/* Truncate .bsm on disk to remove frames after the save point */
 	uint32_t trunc_pos = movie.header.input_offset +
 	                     saved_frame_count * sizeof(bsm_frame_input);
 #ifdef _WIN32
@@ -301,8 +306,7 @@ void movie_unfreeze(deserialize_buffer *buf, void *vgen)
 #endif
 	fseek(movie.file, trunc_pos, SEEK_SET);
 
-	movie.input_buffer_used     = saved_buffer_used;
-	movie.header.frame_count    = saved_frame_count;
+	/* flush_inputs() zeroes input_buffer_used; frame_count stays at saved_frame_count */
 	movie.header.rerecord_count++;
 
 	bsm_write_header(movie.file, &movie.header);
