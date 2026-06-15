@@ -184,6 +184,7 @@ int movie_record_start(system_header *system, const char *filename)
 
 	movie.file  = f;
 	movie.state = BSM_STATE_RECORD;
+	atexit(movie_record_stop);
 
 	debug_message("Movie recording started: %s\n", filename);
 	return 0;
