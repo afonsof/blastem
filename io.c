@@ -164,6 +164,18 @@ void io_port_gamepad_up(io_port *port, uint8_t button)
 	}
 }
 
+uint16_t io_read_pad_buttons(io_port *port)
+{
+	uint16_t state = 0;
+	for (int btn = DPAD_UP; btn < NUM_GAMEPAD_BUTTONS; btn++) {
+		gp_button_def *def = button_defs + btn;
+		if (port->input[def->states[0]] & def->value) {
+			state |= (1 << (btn - DPAD_UP));
+		}
+	}
+	return state;
+}
+
 void io_gamepad_down(sega_io *io, uint8_t gamepad_num, uint8_t button)
 {
 	io_port *port = find_gamepad(io, gamepad_num);
