@@ -1340,9 +1340,15 @@ fd 10111110 cp_iyd
 	update_flags SZYHVXN0
 	
 dd 00100100 inc_ixh
-	add 0x100 ix ix
+	local tmp 8
+	local wide 16
+	tmp = ix >> 8
+	add 1 tmp tmp
 	update_flags SZYHVXN0
-	
+	and 0xFF ix ix
+	wide = tmp << 8
+	or wide ix ix
+
 dd 00101100 inc_ixl
 	local tmp 8
 	mov ix tmp
@@ -1352,9 +1358,15 @@ dd 00101100 inc_ixl
 	or tmp ix ix
 	
 fd 00100100 inc_iyh
-	add 0x100 iy iy
+	local tmp 8
+	local wide 16
+	tmp = iy >> 8
+	add 1 tmp tmp
 	update_flags SZYHVXN0
-	
+	and 0xFF iy iy
+	wide = tmp << 8
+	or wide iy iy
+
 fd 00101100 inc_iyl
 	local tmp 8
 	mov iy tmp
@@ -1433,9 +1445,15 @@ fd 00100011 inc_iy
 	update_flags SZYHVXN1
 	
 dd 00100101 dec_ixh
-	sub 0x100 ix ix
+	local tmp 8
+	local wide 16
+	tmp = ix >> 8
+	sub 1 tmp tmp
 	update_flags SZYHVXN1
-	
+	and 0xFF ix ix
+	wide = tmp << 8
+	or wide ix ix
+
 dd 00101101 dec_ixl
 	local tmp 8
 	mov ix tmp
@@ -1445,9 +1463,15 @@ dd 00101101 dec_ixl
 	or tmp ix ix
 	
 fd 00100101 dec_iyh
-	sub 0x100 iy iy
+	local tmp 8
+	local wide 16
+	tmp = iy >> 8
+	sub 1 tmp tmp
 	update_flags SZYHVXN1
-	
+	and 0xFF iy iy
+	wide = tmp << 8
+	or wide iy iy
+
 fd 00101101 dec_iyl
 	local tmp 8
 	mov iy tmp
