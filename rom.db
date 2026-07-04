@@ -1608,7 +1608,7 @@ SF-002 {
 		}
 		200000 {
 			device sft-wukong-remap
-			offset 200000
+			offset 0
 			last 3BFFFF
 		}
 		3C0000 {

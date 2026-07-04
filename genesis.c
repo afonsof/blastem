@@ -571,11 +571,53 @@ void gen_update_refresh_no_wait(m68k_context *context)
 #define ADJUST_BUFFER (8*MCLKS_LINE*313)
 #define MAX_NO_ADJUST (UINT32_MAX-ADJUST_BUFFER)
 
+/* ---- BlastEm freeze/crash diagnostics (generic, no game-specific addresses) ---- */
+#include <stdlib.h>
+static void dbg_dump_state(const char *tag, m68k_context *context)
+{
+	genesis_context *gen = context ? (genesis_context*)context->system : NULL;
+	fprintf(stderr, "[BLASTEM-DBG] %s  PC=%X\n", tag, context->pc & 0xFFFFFF);
+	fprintf(stderr, "[BLASTEM-DBG]   A0=%X A1=%X A2=%X A3=%X A4=%X A5=%X A6=%X A7=%X\n",
+		context->aregs[0], context->aregs[1], context->aregs[2], context->aregs[3],
+		context->aregs[4], context->aregs[5], context->aregs[6], context->aregs[7]);
+	fprintf(stderr, "[BLASTEM-DBG]   D0=%X D1=%X D2=%X D3=%X D4=%X D5=%X D6=%X D7=%X\n",
+		context->dregs[0], context->dregs[1], context->dregs[2], context->dregs[3],
+		context->dregs[4], context->dregs[5], context->dregs[6], context->dregs[7]);
+	if (gen && gen->work_ram) {
+		uint32_t sp = context->aregs[7] & 0xFFFFFF;
+		fprintf(stderr, "[BLASTEM-DBG]   stack@%X:", sp);
+		for (int w = 0; w < 16; w++) {
+			uint32_t a = (sp + w*4) & 0xFFFFFF, lw = 0;
+			if (a >= 0xFF0000) { uint32_t i = (a & 0xFFFF) >> 1; lw = ((uint32_t)gen->work_ram[i] << 16) | gen->work_ram[i+1]; }
+			fprintf(stderr, " %08X", lw);
+		}
+		fprintf(stderr, "\n");
+	}
+	fflush(stderr);
+}
+/* Freeze watchdog (opt-in: env BLASTEM_FREEZE_WATCH=1). Flags an m68k stuck in a
+   tiny PC range (infinite loop) and reports regs/stack + minimum SP reached
+   (low minSP vs the SDK's stack reservation => stack overflowed into the heap). */
+static uint32_t fw_pcmin = 0xFFFFFFFF, fw_pcmax = 0, fw_stuck = 0, fw_minsp = 0xFFFFFF;
+static uint8_t fw_reported = 0;
+static int fw_enabled(void)
+{
+	static int e = -1;
+	if (e < 0) { const char *v = getenv("BLASTEM_FREEZE_WATCH"); e = (v && *v && *v != '0') ? 1 : 0; }
+	return e;
+}
+
 static m68k_context *sync_components(m68k_context * context, uint32_t address)
 {
 	genesis_context * gen = context->system;
 	vdp_context * v_context = gen->vdp;
 	z80_context * z_context = gen->z80;
+	if (fw_enabled() && !fw_reported) {
+		uint32_t pc = context->pc & 0xFFFFFF;
+		if (pc) { if (pc < fw_pcmin) fw_pcmin = pc; if (pc > fw_pcmax) fw_pcmax = pc; }
+		uint32_t sp = context->aregs[7] & 0xFFFFFF;
+		if (sp >= 0xFF0000 && sp < fw_minsp) fw_minsp = sp;
+	}
 	if (gen->bus_busy) {
 		gen_update_refresh_no_wait(context);
 	} else {
@@ -606,6 +648,17 @@ static m68k_context *sync_components(m68k_context * context, uint32_t address)
 		//printf("reached frame end %d | MCLK Cycles: %d, Target: %d, VDP cycles: %d, vcounter: %d, hslot: %d\n", gen->last_frame, mclks, gen->frame_end, v_context->cycles, v_context->vcounter, v_context->hslot);
 		uint32_t elapsed = v_context->frame - gen->last_frame;
 		gen->last_frame = v_context->frame;
+		if (fw_enabled() && !fw_reported) {
+			uint32_t span = (fw_pcmax >= fw_pcmin) ? (fw_pcmax - fw_pcmin) : 0xFFFFFFFF;
+			if (span < 0x400) fw_stuck++; else fw_stuck = 0;
+			fw_pcmin = 0xFFFFFFFF; fw_pcmax = 0;
+			if (fw_stuck >= 180) {
+				fw_reported = 1;
+				fprintf(stderr, "\n[BLASTEM-DBG] *** FREEZE: m68k stuck in tiny PC range for 180 frames (infinite loop) ***\n");
+				fprintf(stderr, "[BLASTEM-DBG]   min SP reached = %X  (compare to your SDK stack floor; lower => stack overflow)\n", fw_minsp);
+				dbg_dump_state("freeze", context);
+			}
+		}
 		event_flush(mclks);
 		gen->last_flush_cycle = mclks;
 #ifndef IS_LIB
@@ -1841,6 +1894,7 @@ static uint16_t unused_read(uint32_t location, void *vcontext)
 			return 0xFFFF;
 		}
 	} else {
+		dbg_dump_state("unmapped read", context);
 		fatal_error("Machine freeze due to unmapped read from %X\n", location);
 		return 0xFFFF;
 	}

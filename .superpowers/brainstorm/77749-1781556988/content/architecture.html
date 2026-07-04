@@ -1,0 +1,56 @@
+<h2>Sub-épico 4 — Arquitetura de Exportação de Vídeo</h2>
+<p class="subtitle">Pipeline headless: .bsm → frames VDP → ffmpeg → MP4</p>
+
+<div class="section">
+  <div class="label">Pipeline Completo</div>
+  <div style="background: var(--bg-secondary); border-radius: 12px; padding: 24px; font-family: monospace; font-size: 13px; line-height: 1.8; overflow-x: auto;">
+<pre style="margin:0; color: var(--text-primary);">
+┌─────────────────────────────────────────────────────────────────┐
+│                    movie_export_start()                         │
+│                                                                 │
+│  ┌──────────┐    ┌──────────────┐    ┌──────────────────────┐  │
+│  │ .bsm     │───▶│ movie_play_  │───▶│ Loop Headless        │  │
+│  │ file     │    │ start()      │    │ (sem janela SDL)     │  │
+│  └──────────┘    │ Sub-épico 3  │    │                      │  │
+│                  └──────────────┘    │ for cada frame:      │  │
+│                                      │  genesis_frame()     │  │
+│  ┌──────────┐                       │  render_get_fb()     │  │
+│  │ ffmpeg   │◀── pipe stdin ────────│  fwrite(fb, pipe)    │  │
+│  │ CLI      │    raw RGB24 frames   │                      │  │
+│  │          │                       └──────────────────────┘  │
+│  │ encode ▶ │──▶ saida.mp4                                    │
+│  └──────────┘                                                 │
+└─────────────────────────────────────────────────────────────────┘
+</pre>
+  </div>
+</div>
+
+<div class="section">
+  <div class="label">Fluxo de Dados por Frame</div>
+  <div style="background: var(--bg-secondary); border-radius: 12px; padding: 24px; font-family: monospace; font-size: 13px; line-height: 1.8;">
+<pre style="margin:0; color: var(--text-primary);">
+  genesis_frame(system)
+       │
+       ├── VDP render (vdp_force_update_framebuffer)
+       │      └── fb = render_get_framebuffer(cur_buffer, &pitch)
+       │           └── pixels em RAM (320×224 ou 256×224, ARGB8888)
+       │
+       ├── movie_update(system)
+       │      └── injeta inputs do .bsm (sub-épico 3)
+       │
+       └── movie_export_write_frame(fb, pitch, w, h)
+              └── converte ARGB → RGB24
+              └── fwrite(raw_rgb, w*h*3, pipe_ffmpeg)
+</pre>
+  </div>
+</div>
+
+<div class="section">
+  <div class="label">Comando FFmpeg</div>
+  <div style="background: var(--bg-secondary); border-radius: 12px; padding: 16px;">
+    <code style="font-size: 13px; word-break: break-all;">
+      ffmpeg -y -f rawvideo -vcodec rawvideo -s WxH -r 60 -pix_fmt rgb24 -i pipe:0 -c:v libx264 -preset medium -crf 18 -pix_fmt yuv420p saida.mp4
+    </code>
+  </div>
+</div>
+</div>
