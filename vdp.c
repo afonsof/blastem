@@ -8,9 +8,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include "render.h"
+#include "movie.h"
 #include "util.h"
 #include "event_log.h"
 #include "terminal.h"
+#include "png.h"
 #ifndef DISABLE_NUKLEAR
 #include "nuklear_ui/debug_ui.h"
 #endif
@@ -2276,7 +2278,7 @@ static void vdp_advance_line(vdp_context *context)
 	}
 }
 
-static void vram_debug_mode5(pixel_t *fb, uint32_t pitch, vdp_context *context)
+void vram_debug_mode5(pixel_t *fb, uint32_t pitch, vdp_context *context)
 {
 	uint8_t pal = (context->debug_modes[DEBUG_VRAM] % 4) << 4;
 	int yshift, ymask, tilesize;
@@ -2311,7 +2313,7 @@ static void vram_debug_mode5(pixel_t *fb, uint32_t pitch, vdp_context *context)
 	}
 }
 
-static void vram_debug_mode4(pixel_t *fb, uint32_t pitch, vdp_context *context)
+void vram_debug_mode4(pixel_t *fb, uint32_t pitch, vdp_context *context)
 {
 	for (int y = 0; y < 256; y++)
 	{
@@ -2338,7 +2340,7 @@ static void vram_debug_mode4(pixel_t *fb, uint32_t pitch, vdp_context *context)
 	}
 }
 
-static void vram_debug_tms(pixel_t *fb, uint32_t pitch, vdp_context *context)
+void vram_debug_tms(pixel_t *fb, uint32_t pitch, vdp_context *context)
 {
 	uint8_t pal = ((context->debug_modes[DEBUG_VRAM] % 14) + 2) << 1;
 	pal = (pal & 0xE) | (pal << 1 & 0x20);
@@ -2360,6 +2362,70 @@ static void vram_debug_tms(pixel_t *fb, uint32_t pitch, vdp_context *context)
 			}
 		}
 	}
+}
+
+static void vram_mode5_1to1(pixel_t *fb, uint32_t pitch, vdp_context *context)
+{
+	uint8_t pal = (context->debug_modes[DEBUG_VRAM] % 4) << 4;
+	int yshift, ymask, tilesize;
+	if (context->double_res) {
+		yshift = 5;
+		ymask = 0xF;
+		tilesize = 64;
+	} else {
+		yshift = 4;
+		ymask = 0x7;
+		tilesize = 32;
+	}
+	for (int y = 0; y < 256; y++)
+	{
+		pixel_t *line = fb + y * pitch / sizeof(pixel_t);
+		int row = y >> (yshift - 1);
+		int yoff = y & ymask;
+		for (int col = 0; col < 64; col++)
+		{
+			uint16_t address = (row * 64 + col) * tilesize + yoff * 4;
+			for (int x = 0; x < 4; x++)
+			{
+				uint8_t byte = context->vdpmem[address++];
+				uint8_t left = byte >> 4 | pal;
+				uint8_t right = byte & 0xF | pal;
+				*(line++) = context->colors[left];
+				*(line++) = context->colors[right];
+			}
+		}
+	}
+}
+
+void vdp_save_vram_image(vdp_context *context, const char *path)
+{
+	uint32_t width = 512;
+	uint32_t height = 256;
+	uint32_t pitch = width * sizeof(pixel_t);
+	
+	pixel_t *fb = calloc(width * height, sizeof(pixel_t));
+	if (!fb) {
+		warning("Failed to allocate VRAM image buffer\n");
+		return;
+	}
+	
+	if (context->type == VDP_GENESIS && (context->regs[REG_MODE_2] & BIT_MODE_5)) {
+		vram_mode5_1to1(fb, pitch, context);
+	} else if (context->type != VDP_TMS9918A && (context->regs[REG_MODE_1] & BIT_MODE_4)) {
+		vram_debug_mode4(fb, pitch, context);
+	} else if (context->type != VDP_GENESIS) {
+		vram_debug_tms(fb, pitch, context);
+	}
+	
+	FILE *f = fopen(path, "wb");
+	if (f) {
+		save_png(f, fb, width, height, pitch);
+		fclose(f);
+	} else {
+		warning("Failed to open VRAM image file %s for writing\n", path);
+	}
+	
+	free(fb);
 }
 
 static void plane_debug_mode5(pixel_t *fb, uint32_t pitch, vdp_context *context)
@@ -3065,6 +3131,13 @@ static void advance_output_line(vdp_context *context)
 			context->cur_buffer = is_even ? FRAMEBUFFER_EVEN : FRAMEBUFFER_ODD;
 			context->pushed_frame = 1;
 			context->fb = NULL;
+		}
+		/* Sub-epic 4: video export hook — fires in both headless
+		 * and non-headless mode. */
+		if (current_system) {
+			movie_export_capture(current_system,
+				context->cur_buffer,
+				context->h40_lines > (context->inactive_start + context->border_top) / 2 ? LINEBUF_SIZE : (256+HORIZ_BORDER));
 		}
 		vdp_update_per_frame_debug(context);
 		context->h40_lines = 0;

@@ -7,6 +7,7 @@
 #include "saves.h"
 #include "util.h"
 #include "genesis.h"
+#include "vdp.h"
 #include "sms.h"
 #include "menu.h"
 #include "bindings.h"
@@ -532,16 +533,26 @@ void handle_binding_up(keybinding * binding)
 		case UI_DUMP_VRAM:
 			if (allow_content_binds && current_system->type == SYSTEM_GENESIS) {
 				genesis_context *gen = (genesis_context *)current_system;
-				char *path = get_content_config_path("ui\0screenshot_path\0", "ui\0vram_dump_template\0", "blastem_vram_%Y%m%d_%H%M%S.bin");
-				FILE *f = fopen(path, "wb");
+				char *bin_path = get_content_config_path("ui\0screenshot_path\0", "ui\0vram_dump_template\0", "blastem_vram_%Y%m%d_%H%M%S.bin");
+				FILE *f = fopen(bin_path, "wb");
 				if (f) {
 					fwrite(gen->vdp->vdpmem, 1, VRAM_SIZE, f);
 					fclose(f);
-					render_set_osd_message("VRAM dump saved");
-				} else {
-					render_set_osd_message("VRAM dump FAILED");
 				}
-				free(path);
+				
+				char *png_path = malloc(strlen(bin_path) + 1);
+				if (png_path) {
+					strcpy(png_path, bin_path);
+					char *ext = strrchr(png_path, '.');
+					if (ext) {
+						strcpy(ext, ".png");
+						vdp_save_vram_image(gen->vdp, png_path);
+					}
+					free(png_path);
+				}
+				
+				free(bin_path);
+				render_set_osd_message(f ? "VRAM dump + image saved" : "VRAM dump FAILED");
 			}
 			break;
 		case UI_TOGGLE_LAYER_BGA:

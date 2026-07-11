@@ -7,6 +7,8 @@
 #include <stdint.h>
 #include <stdio.h>
 #include "system.h"
+#include "serialize.h"
+#include "pixel.h"
 
 /* ---- File format constants ---- */
 #define BSM_MAGIC            0x1a4d5342u  /* "BSM\x1a" little-endian */
@@ -73,5 +75,61 @@ bsm_state movie_get_state(void);
 /* Low-level format helpers (also used by testmovie.c and future playback) */
 void bsm_write_header(FILE *f, const bsm_header *h);
 int  bsm_read_header(FILE *f, bsm_header *h);   /* returns 0 ok, -1 bad magic/version */
+
+/* ---- Re-recording (sub-epic 2) ---- */
+
+/* Chamado ao final de genesis_serialize: embute movie state em SECTION_MOVIE.
+ * No-op se não estiver gravando. */
+void movie_freeze(serialize_buffer *buf);
+
+/* Handler para SECTION_MOVIE em genesis_deserialize: trunca timeline ao frame salvo.
+ * Se gravando e seção ausente: movie_check_after_load() para a gravação. */
+void movie_unfreeze(deserialize_buffer *buf, void *vgen);
+
+/* Chamar ANTES de cada genesis_deserialize para resetar a flag de detecção. */
+void movie_prepare_for_load(void);
+
+/* Chamar APÓS genesis_deserialize: para gravação se SECTION_MOVIE não apareceu. */
+void movie_check_after_load(void);
+
+/* ---- Playback (sub-epic 3) ---- */
+
+/* Opens filename, restores the embedded save state via system->deserialize,
+ * loads all input frames into RAM and switches to BSM_STATE_PLAY.
+ * Returns 0 on success, -1 on error. Safe to call while recording (stops it). */
+int movie_play_start(system_header *system, const char *filename);
+
+/* Stops playback immediately, resets play_frame to 0.
+ * Safe to call when not playing. */
+void movie_play_stop(void);
+
+/* Returns the index of the next frame to inject (0 when not playing). */
+uint32_t movie_get_play_frame(void);
+
+/* Called immediately after movie_play_start to pre-inject frame 0's input
+ * into the genesis io ports. Fixes the 1-frame playback offset caused by
+ * movie_update being called at the end of each frame (after io_run).
+ * Must only be called when movie.state == BSM_STATE_PLAY && frame_count > 0. */
+void movie_play_pre_inject(system_header *system);
+
+/* ---- Video export (sub-epic 4) ---- */
+
+/* Converte framebuffer ARGB8888 para RGB24 e escreve no pipe.
+ * Pula BORDER_LEFT pixels de borda à esquerda.
+ * Retorna 0 em sucesso, -1 em erro de escrita. */
+int movie_export_write_frame(pixel_t *fb, int pitch,
+                             uint32_t vis_width, uint32_t vis_height, FILE *out);
+
+/* Exporta um .bsm para video MP4 via ffmpeg CLI (pipe).
+ * Configura o estado de export e abre pipe; a captura dos frames
+ * ocorre via movie_export_capture() chamado de render_framebuffer_updated.
+ * Requer ffmpeg no PATH.
+ * Retorna 0 em sucesso, nao-zero em erro. */
+int movie_export_start(system_header *system, const char *bsm_path, const char *output_path);
+
+/* Callback chamado a cada frame renderizado pelo VDP.
+ * Quando export_active, captura o framebuffer e escreve no pipe.
+ * Quando todos os frames sao capturados, fecha o pipe e seta should_exit. */
+void movie_export_capture(system_header *system, uint8_t which, int width);
 
 #endif /* MOVIE_H_ */

@@ -327,6 +327,10 @@ void vdp_update_per_frame_debug(vdp_context *context);
 void vdp_force_update_framebuffer(vdp_context *context);
 void vdp_toggle_debug_view(vdp_context *context, uint8_t debug_type);
 void vdp_inc_debug_mode(vdp_context *context);
+void vdp_save_vram_image(vdp_context *context, const char *path);
+void vram_debug_mode5(pixel_t *fb, uint32_t pitch, vdp_context *context);
+void vram_debug_mode4(pixel_t *fb, uint32_t pitch, vdp_context *context);
+void vram_debug_tms(pixel_t *fb, uint32_t pitch, vdp_context *context);
 //to be implemented by the host system
 uint16_t read_dma_value(uint32_t address);
 void vdp_dma_started(void);

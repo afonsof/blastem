@@ -117,6 +117,18 @@ uint32_t render_get_window_texture(uint8_t which);
 #endif
 void render_destroy_window(uint8_t which);
 pixel_t *render_get_framebuffer(uint8_t which, int *pitch);
+/* ---- Headless framebuffer access (sub-epic 4: video export) ---- */
+
+/* Initialize globals needed for headless framebuffer access.
+ * Must be called once before render_export_get_fb().
+ * Safe to call even if already initialized by normal window path. */
+void render_export_init(void);
+
+/* Returns a framebuffer suitable for headless video export.
+ * Does NOT depend on SDL window, GL context, or sync source.
+ * Returns the static texture_buf and sets *pitch to its row stride in bytes.
+ * render_export_init() must be called first. */
+pixel_t *render_export_get_fb(int *pitch);
 void render_framebuffer_updated(uint8_t which, int width);
 //returns the framebuffer index associated with the Window that has focus
 uint8_t render_get_active_framebuffer(void);

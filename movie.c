@@ -5,11 +5,17 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <errno.h>
+#ifndef _WIN32
+#include <unistd.h>
+#endif
 #include "movie.h"
 #include "io.h"
 #include "genesis.h"
 #include "zlib/zlib.h"
 #include "util.h"
+#include "vdp.h"
+#include "render.h"
 
 _Static_assert(sizeof(bsm_header) == BSM_HEADER_SIZE,
                "bsm_header layout changed — file format broken");
@@ -95,6 +101,15 @@ typedef struct {
 	bsm_frame_input  *input_buffer;
 	uint32_t         input_buffer_cap;  /* allocated slots */
 	uint32_t         input_buffer_used; /* filled slots since last flush */
+	uint8_t          freeze_seen;   /* setado por movie_unfreeze, checado por movie_check_after_load */
+	uint32_t         play_frame;       /* next frame index to inject during BSM_STATE_PLAY */
+	/* Video export (sub-epic 4) */
+	FILE             *export_pipe;     /* ffmpeg pipe */
+	uint32_t         export_frame;     /* frames captured so far */
+	uint32_t         export_total;     /* total frames to capture */
+	uint32_t         export_last_vdp_frame; /* VDP frame of last capture */
+	uint8_t          export_active;    /* 1 during export */
+	int              export_pal;       /* 1 if PAL, for fps detection */
 } bsm_movie;
 
 static bsm_movie movie;
@@ -113,11 +128,279 @@ static void flush_inputs(void)
 	movie.input_buffer_used = 0;
 }
 
+/* ---- Video export helpers (sub-epic 4) ---- */
+
+/* Converte framebuffer ARGB8888 para RGB24 e escreve no pipe do ffmpeg.
+ * Pula BORDER_LEFT pixels de borda à esquerda e lê apenas a área visível.
+ * Retorna 0 em sucesso, -1 em erro de escrita.
+ * NOTA: não-static para acesso por testmovie.c */
+int movie_export_write_frame(pixel_t *fb, int pitch,
+                                     uint32_t vis_width, uint32_t vis_height, FILE *out)
+{
+	uint8_t *row_base = (uint8_t *)fb;
+	size_t rgb_row_size = vis_width * 3;
+	uint8_t *rgb_row = malloc(rgb_row_size);
+	if (!rgb_row) {
+		warning("movie_export_write_frame: out of memory for row buffer\n");
+		return -1;
+	}
+
+	for (uint32_t y = 0; y < vis_height; y++) {
+		/* Pula colunas de borda esquerda */
+		uint32_t *src = (uint32_t *)(row_base + (size_t)y * pitch) + BORDER_LEFT;
+		for (uint32_t x = 0; x < vis_width; x++) {
+			uint32_t argb = src[x];
+			rgb_row[x * 3 + 0] = (argb >> 16) & 0xFF; /* R */
+			rgb_row[x * 3 + 1] = (argb >> 8)  & 0xFF; /* G */
+			rgb_row[x * 3 + 2] = argb         & 0xFF; /* B */
+		}
+		if (fwrite(rgb_row, 1, rgb_row_size, out) != rgb_row_size) {
+			warning("movie_export_write_frame: write failed (pipe broken?)\n");
+			free(rgb_row);
+			return -1;
+		}
+	}
+	free(rgb_row);
+	return 0;
+}
+
+/* Callback from vdp.c frame boundary: called every time the VDP finishes a
+ * frame.  When export is active, reads the framebuffer directly from the
+ * VDP context (works in both headless and windowed modes) and writes to
+ * the ffmpeg pipe.  When all frames are captured, closes the pipe and
+ * requests emulator exit. */
+void movie_export_capture(system_header *system, uint8_t which, int width)
+{
+	if (!movie.export_active)
+		return;
+	if (which > FRAMEBUFFER_EVEN)
+		return;
+
+	genesis_context *gen = (genesis_context *)system;
+
+	/* The VDP frame boundary fires multiple times per frame
+	 * (once per post-render line).  Only capture each VDP frame once. */
+	if (gen->vdp->frame == movie.export_last_vdp_frame)
+		return;
+	movie.export_last_vdp_frame = gen->vdp->frame;
+
+	/* Read framebuffer directly from the VDP context.
+	 * In headless mode the VDP allocates its own fb which stays
+	 * valid across frames; in windowed mode fb points into texture_buf.
+	 * We use fb + border_top * pitch to get the start of the visible area,
+	 * because context->output has advanced past all visible lines by now. */
+	int pitch      = gen->vdp->output_pitch;
+	pixel_t *fb    = (pixel_t *)((char *)gen->vdp->fb
+	                   + pitch * gen->vdp->border_top);
+	if (!fb) {
+		warning("movie_export_capture: null framebuffer at frame %u\n",
+		        movie.export_frame);
+		movie.export_active = 0;
+		if (movie.export_pipe) {
+			pclose(movie.export_pipe);
+			movie.export_pipe = NULL;
+		}
+		return;
+	}
+
+	/* Detect resolution from VDP registers (safe after deserialize) */
+	int is_h40 = gen->vdp->regs[REG_MODE_2] & BIT_H40;
+	uint32_t vis_width  = is_h40 ? 320 : 256;
+	uint32_t vis_height = movie.export_pal ? 240 : 224;
+
+	if (movie_export_write_frame(fb, pitch, vis_width, vis_height, movie.export_pipe) != 0) {
+		warning("movie_export_capture: write failed at frame %u\n",
+		        movie.export_frame);
+		movie.export_active = 0;
+		pclose(movie.export_pipe);
+		movie.export_pipe = NULL;
+		return;
+	}
+
+	movie.export_frame++;
+	if (movie.export_frame >= movie.export_total) {
+		/* All frames captured — finalize */
+		debug_message("movie_export_capture: %u frames exported\n",
+		              movie.export_frame);
+		movie.export_active = 0;
+		int pclose_ret = pclose(movie.export_pipe);
+		movie.export_pipe = NULL;
+		if (pclose_ret != 0) {
+			warning("movie_export_capture: ffmpeg exited with status %d\n",
+			        pclose_ret);
+		}
+		/* Stop the Genesis emulation loop and request exit */
+		gen->m68k->should_return = 1;
+		system->should_exit = 1;
+	}
+}
+
+int movie_export_start(system_header *system, const char *bsm_path, const char *output_path)
+{
+	/* 1. Start playback (sub-epic 3) */
+	if (movie_play_start(system, bsm_path) != 0) {
+		warning("movie_export_start: failed to open %s for playback\n", bsm_path);
+		return -1;
+	}
+
+	genesis_context *gen = (genesis_context *)system;
+
+	/* 2. Initialize headless framebuffer */
+	render_export_init();
+
+	/* 3. Detect framerate and PAL from header */
+	int fps = (movie.header.flags & BSM_FLAG_PAL) ? 50 : 60;
+	int is_pal = (movie.header.flags & BSM_FLAG_PAL) != 0;
+
+	/* 4. Detect visible resolution from VDP registers (restored by deserialize).
+	 * Do NOT use derived fields like output_lines which are 0 until first render. */
+	int is_h40 = gen->vdp->regs[REG_MODE_2] & BIT_H40;
+	uint32_t vis_width  = is_h40 ? 320 : 256;
+	uint32_t vis_height = is_pal ? 240 : 224;
+
+	/* 5. Open ffmpeg pipe */
+	char cmd[1024];
+	snprintf(cmd, sizeof(cmd),
+		"ffmpeg -y -f rawvideo -vcodec rawvideo "
+		"-s %dx%d -r %d -pix_fmt rgb24 -i pipe:0 "
+		"-c:v libx264 -preset medium -crf 18 -pix_fmt yuv420p \"%s\"",
+		vis_width, vis_height, fps, output_path);
+
+	debug_message("movie_export_start: %s\n", cmd);
+
+	FILE *pipe_out = popen(cmd, "w");
+	if (!pipe_out) {
+		warning("movie_export_start: ffmpeg not found or failed to start: %s\n",
+		        strerror(errno));
+		movie_play_stop();
+		return -1;
+	}
+
+	/* 6. Set up export state — frames will be captured by
+	 *    movie_export_capture() called from render_framebuffer_updated. */
+	movie.export_pipe   = pipe_out;
+	movie.export_frame  = 0;
+	movie.export_total  = movie.header.frame_count;
+	movie.export_last_vdp_frame = UINT32_MAX;
+	movie.export_active = 1;
+	movie.export_pal    = is_pal;
+
+	debug_message("movie_export_start: exporting %u frames (%dx%d, %d fps)\n",
+	              movie.export_total, vis_width, vis_height, fps);
+	return 0;
+}
+
 /* ---- Public API ---- */
 
 bsm_state movie_get_state(void)
 {
 	return movie.state;
+}
+
+uint32_t movie_get_play_frame(void)
+{
+	return movie.play_frame;
+}
+
+void movie_play_stop(void)
+{
+	if (movie.state != BSM_STATE_PLAY)
+		return;
+	movie.state      = BSM_STATE_NONE;
+	movie.play_frame = 0;
+	debug_message("Movie playback stopped\n");
+}
+
+void movie_play_pre_inject(system_header *system)
+{
+	if (movie.state != BSM_STATE_PLAY || movie.header.frame_count == 0)
+		return;
+	if (system->type != SYSTEM_GENESIS && system->type != SYSTEM_SEGACD)
+		return;
+
+	genesis_context *gen = (genesis_context *)system;
+	bsm_frame_input *frame0 = &movie.input_buffer[0];
+	io_port *port1 = find_gamepad(&gen->io, 1);
+	io_port *port2 = find_gamepad(&gen->io, 2);
+	if (port1) io_port_set_pad_state(port1, frame0->pad1);
+	if (port2) io_port_set_pad_state(port2, frame0->pad2);
+
+	movie.play_frame = 1;  /* frame 0 already injected, next is frame 1 */
+}
+
+int movie_play_start(system_header *system, const char *filename)
+{
+	if (movie.state != BSM_STATE_NONE)
+		movie_record_stop();
+
+	FILE *f = fopen(filename, "rb");
+	if (!f) {
+		warning("movie_play_start: cannot open %s\n", filename);
+		return -1;
+	}
+
+	bsm_header h;
+	if (bsm_read_header(f, &h) != 0) {
+		warning("movie_play_start: invalid .bsm file\n");
+		fclose(f);
+		return -1;
+	}
+
+	/* ROM CRC check — warning only, never blocks playback */
+	uint32_t rom_crc = (uint32_t)crc32(0,
+		(const Bytef *)system->info.rom, system->info.rom_size);
+	if (h.rom_crc32 != rom_crc) {
+		warning("movie_play_start: ROM CRC mismatch "
+			"(movie=0x%08x current=0x%08x) — proceeding anyway\n",
+			h.rom_crc32, rom_crc);
+	}
+
+	/* Read and restore embedded save state */
+	fseek(f, h.savestate_offset, SEEK_SET);
+	uint32_t ss_size;
+	if (fread(&ss_size, 4, 1, f) != 1) {
+		warning("movie_play_start: failed to read save state size\n");
+		fclose(f);
+		return -1;
+	}
+	uint8_t *ss_buf = malloc(ss_size);
+	if (!ss_buf || fread(ss_buf, 1, ss_size, f) != ss_size) {
+		warning("movie_play_start: failed to read embedded save state\n");
+		free(ss_buf);
+		fclose(f);
+		return -1;
+	}
+	system->deserialize(system, ss_buf, ss_size);
+	free(ss_buf);
+
+	/* Load all input frames into RAM */
+	if (!movie.input_buffer || movie.input_buffer_cap < h.frame_count) {
+		free(movie.input_buffer);
+		movie.input_buffer = malloc(h.frame_count * sizeof(bsm_frame_input));
+		if (!movie.input_buffer) {
+			warning("movie_play_start: out of memory for input buffer\n");
+			fclose(f);
+			return -1;
+		}
+		movie.input_buffer_cap = h.frame_count;
+	}
+
+	fseek(f, h.input_offset, SEEK_SET);
+	if (fread(movie.input_buffer, sizeof(bsm_frame_input),
+		  h.frame_count, f) != h.frame_count) {
+		warning("movie_play_start: failed to read input buffer\n");
+		fclose(f);
+		return -1;
+	}
+	fclose(f);
+
+	movie.header     = h;
+	movie.play_frame = 0;
+	movie.state      = BSM_STATE_PLAY;
+
+	debug_message("Movie playback started: %s (%u frames)\n",
+		      filename, h.frame_count);
+	return 0;
 }
 
 int movie_record_start(system_header *system, const char *filename)
@@ -209,15 +492,33 @@ void movie_record_stop(void)
 
 void movie_update(system_header *system)
 {
-	if (movie.state != BSM_STATE_RECORD) {
-		return;
-	}
-
 	if (system->type != SYSTEM_GENESIS && system->type != SYSTEM_SEGACD) {
 		return;
 	}
 
 	genesis_context *gen = (genesis_context *)system;
+
+	if (movie.state == BSM_STATE_PLAY) {
+		if (movie.play_frame >= movie.header.frame_count) {
+			/* Input buffer exhausted — go live */
+			movie.state = BSM_STATE_NONE;
+			debug_message("Movie playback ended at frame %u — going live\n",
+				      movie.play_frame);
+			return;
+		}
+		bsm_frame_input *frame = &movie.input_buffer[movie.play_frame];
+		io_port *port1 = find_gamepad(&gen->io, 1);
+		io_port *port2 = find_gamepad(&gen->io, 2);
+		if (port1) io_port_set_pad_state(port1, frame->pad1);
+		if (port2) io_port_set_pad_state(port2, frame->pad2);
+		movie.play_frame++;
+		return;
+	}
+
+	if (movie.state != BSM_STATE_RECORD) {
+		return;
+	}
+
 	io_port *port1 = find_gamepad(&gen->io, 1);
 	io_port *port2 = find_gamepad(&gen->io, 2);
 
@@ -231,4 +532,81 @@ void movie_update(system_header *system)
 	if (movie.input_buffer_used >= movie.input_buffer_cap) {
 		flush_inputs();
 	}
+}
+
+/* ---- Re-recording (sub-epic 2) ---- */
+
+void movie_prepare_for_load(void)
+{
+	movie.freeze_seen = 0;
+}
+
+void movie_check_after_load(void)
+{
+	if (movie.state != BSM_STATE_RECORD) {
+		movie.freeze_seen = 0;
+		return;
+	}
+	if (!movie.freeze_seen) {
+		warning("movie_check_after_load: save state sem SECTION_MOVIE — parando gravação\n");
+		movie_record_stop();
+	}
+	movie.freeze_seen = 0;
+}
+
+void movie_freeze(serialize_buffer *buf)
+{
+	if (movie.state != BSM_STATE_RECORD) {
+		return;
+	}
+	start_section(buf, SECTION_MOVIE);
+	save_int32(buf, movie.header.frame_count);
+	save_int32(buf, movie.input_buffer_used);
+	save_buffer8(buf, (uint8_t *)movie.input_buffer,
+	             movie.input_buffer_used * sizeof(bsm_frame_input));
+	end_section(buf);
+}
+
+void movie_unfreeze(deserialize_buffer *buf, void *vgen)
+{
+	(void)vgen;
+	uint32_t saved_frame_count = load_int32(buf);
+	uint32_t saved_buffer_used = load_int32(buf);
+
+	movie.freeze_seen = 1;
+
+	if (movie.state != BSM_STATE_RECORD) {
+		/* Not recording: ignore data. load_section already advances the parent cursor. */
+		return;
+	}
+
+	if (saved_buffer_used > movie.input_buffer_cap) {
+		saved_buffer_used = movie.input_buffer_cap;
+	}
+	load_buffer8(buf, (uint8_t *)movie.input_buffer,
+	             saved_buffer_used * sizeof(bsm_frame_input));
+
+	/* Update counters BEFORE flush so flush seeks to the correct position */
+	movie.input_buffer_used  = saved_buffer_used;
+	movie.header.frame_count = saved_frame_count;
+
+	/* Flush the restored buffer to disk at the correct position */
+	flush_inputs();
+
+	/* Truncate .bsm on disk to remove frames after the save point */
+	uint32_t trunc_pos = movie.header.input_offset +
+	                     saved_frame_count * sizeof(bsm_frame_input);
+#ifdef _WIN32
+	_chsize(fileno(movie.file), trunc_pos);
+#else
+	ftruncate(fileno(movie.file), trunc_pos);
+#endif
+	fseek(movie.file, trunc_pos, SEEK_SET);
+
+	/* flush_inputs() zeroes input_buffer_used; frame_count stays at saved_frame_count */
+	movie.header.rerecord_count++;
+
+	bsm_write_header(movie.file, &movie.header);
+	debug_message("Movie rerecord: truncado para frame %u (rerecord_count=%u)\n",
+	              saved_frame_count, movie.header.rerecord_count);
 }

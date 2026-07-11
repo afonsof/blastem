@@ -422,6 +422,9 @@ int main(int argc, char ** argv)
 	uint8_t debug_target = 0;
 	char *port;
 	char *record_file = NULL;
+	char *play_file = NULL;
+	char *export_bsm = NULL;
+	char *export_mp4 = NULL;
 	for (int i = 1; i < argc; i++) {
 		if (argv[i][0] == '-') {
 			switch(argv[i][1]) {
@@ -489,6 +492,23 @@ int main(int argc, char ** argv)
 					fatal_error("-R must be followed by a movie filename\n");
 				}
 				record_file = argv[i];
+				break;
+			case 'P':
+				i++;
+				if (i >= argc) {
+					fatal_error("-P must be followed by a movie filename\n");
+				}
+				play_file = argv[i];
+				break;
+			case '-':
+				/* --long options */
+				if (strcmp(argv[i] + 2, "export-movie") == 0 && i + 2 < argc) {
+					export_bsm = argv[++i];
+					export_mp4 = argv[++i];
+					headless = 1;
+					continue;
+				}
+				fatal_error("Unrecognized switch %s\n", argv[i]);
 				break;
 			case 'm':
 				i++;
@@ -581,6 +601,8 @@ int main(int argc, char ** argv)
 					"	-y          Log individual YM-2612 channels to WAVE files\n"
 					"   -e FILE     Write hardware event log to FILE\n"
 					"	-R FILE     Record gameplay to FILE in .bsm format\n"
+					"\t-P FILE     Play back gameplay from FILE in .bsm format\n"
+					"	--export-movie BSM OUT  Export .bsm to MP4 via ffmpeg (headless)\n"
 				);
 				return 0;
 			default:
@@ -732,6 +754,24 @@ int main(int argc, char ** argv)
 		if (movie_record_start(current_system, record_file)) {
 			warning("Failed to start movie recording to %s\n", record_file);
 			record_file = NULL;
+		}
+	}
+	if (export_bsm && current_system) {
+		/* Headless export: set up ffmpeg pipe and export state.
+		 * Frames will be captured by movie_export_capture() called
+		 * from vdp.c frame boundary (works in headless mode). */
+		if (movie_export_start(current_system, export_bsm, export_mp4) != 0) {
+			warning("Failed to start movie export %s to %s\n", export_bsm, export_mp4);
+			return 1;
+		}
+		movie_play_pre_inject(current_system);
+	}
+	if (play_file && current_system) {
+		if (movie_play_start(current_system, play_file)) {
+			warning("Failed to start movie playback from %s\n", play_file);
+			play_file = NULL;
+		} else {
+			movie_play_pre_inject(current_system);
 		}
 	}
 	current_system->start_context(current_system,  menu ? NULL : statefile);
