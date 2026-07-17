@@ -79,27 +79,33 @@ void update_title(char *rom_name)
 }
 
 #include "png.h"
-void save_screenshot_and_exit()
+int save_screenshot(const char *path)
 {
 	if (!current_system || !current_system->get_vdp) {
-		exit(0);
+		return 0;
 	}
 	vdp_context *v_context = current_system->get_vdp(current_system);
 	if (!v_context || !v_context->fb) {
-		exit(0);
+		return 0;
 	}
-	char *path = get_content_config_path("ui\0screenshot_path\0", "ui\0screenshot_template\0", "blastem_%c.png");
 	FILE *f = fopen(path, "wb");
-	if (f) {
-		uint32_t width = (v_context->regs[REG_MODE_4] & BIT_H40) ? 320 : 256;
-		width += HORIZ_BORDER;
-		uint32_t height = v_context->inactive_start + v_context->border_bot + v_context->border_top;
-		save_png(f, v_context->fb, width, height, v_context->output_pitch);
-		fclose(f);
-		debug_message("Screenshot saved to %s\n", path);
-	} else {
+	if (!f) {
 		warning("Failed to open screenshot file %s for writing\n", path);
+		return 0;
 	}
+	uint32_t width = (v_context->regs[REG_MODE_4] & BIT_H40) ? 320 : 256;
+	width += HORIZ_BORDER;
+	uint32_t height = v_context->inactive_start + v_context->border_bot + v_context->border_top;
+	save_png(f, v_context->fb, width, height, v_context->output_pitch);
+	fclose(f);
+	debug_message("Screenshot saved to %s\n", path);
+	return 1;
+}
+
+void save_screenshot_and_exit()
+{
+	char *path = get_content_config_path("ui\0screenshot_path\0", "ui\0screenshot_template\0", "blastem_%c.png");
+	save_screenshot(path);
 	free(path);
 	exit(0);
 }

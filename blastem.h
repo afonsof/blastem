@@ -22,5 +22,6 @@ void init_system_with_media(char *path, system_type force_stype);
 void apply_updated_config(void);
 const system_media *current_media(void);
 void save_screenshot_and_exit(void);
+int save_screenshot(const char *path);
 
 #endif //BLASTEM_H_
