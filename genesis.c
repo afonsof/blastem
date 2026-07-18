@@ -23,6 +23,7 @@
 #include "event_log.h"
 #include "paths.h"
 #include "movie.h"
+#include "control.h"
 #define MCLKS_NTSC 53693175
 #define MCLKS_PAL  53203395
 
@@ -664,6 +665,9 @@ static m68k_context *sync_components(m68k_context * context, uint32_t address)
 #ifndef IS_LIB
 		movie_update(&gen->header);
 #endif
+		if (control_enabled) {
+			control_frame_boundary(gen, elapsed);
+		}
 		if (gen->header.enter_debugger_frames) {
 			if (elapsed >= gen->header.enter_debugger_frames) {
 				gen->header.enter_debugger_frames = 0;
@@ -936,6 +940,9 @@ static m68k_context* sync_components_pico(m68k_context * context, uint32_t addre
 		gen->last_frame = v_context->frame;
 		event_flush(mclks);
 		gen->last_flush_cycle = mclks;
+		if (control_enabled) {
+			control_frame_boundary(gen, elapsed);
+		}
 		if (gen->header.enter_debugger_frames) {
 			if (elapsed >= gen->header.enter_debugger_frames) {
 				gen->header.enter_debugger_frames = 0;
