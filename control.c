@@ -177,15 +177,21 @@ static int parse_pad(const char *args)
 	return mask;
 }
 
-// Apply pad_desired vs pad_applied via io_gamepad_down/up on pad 1 (index 0).
+// gamepad_num for controller port 1. io_gamepad_down/up resolve the port via
+// find_gamepad(io, gamepad_num) matching port->device.pad.gamepad_num — NOT the
+// port array index. The default io config maps port 1 to "gamepad*.1", so its
+// gamepad_num is 1; passing 0 finds no port and the input is silently dropped.
+#define CONTROL_PAD1 1
+
+// Apply pad_desired vs pad_applied via io_gamepad_down/up on controller port 1.
 static void control_apply_pad(void *sys)
 {
 	genesis_context *gen = (genesis_context *)sys;
 	uint16_t changed = pad_desired ^ pad_applied;
 	for (int i = 0; i < BTN_COUNT; i++) {
 		if (!(changed & BTN_MAP[i].bit)) continue;
-		if (pad_desired & BTN_MAP[i].bit) io_gamepad_down(&gen->io, 0, BTN_MAP[i].button);
-		else io_gamepad_up(&gen->io, 0, BTN_MAP[i].button);
+		if (pad_desired & BTN_MAP[i].bit) io_gamepad_down(&gen->io, CONTROL_PAD1, BTN_MAP[i].button);
+		else io_gamepad_up(&gen->io, CONTROL_PAD1, BTN_MAP[i].button);
 	}
 	pad_applied = pad_desired;
 }
