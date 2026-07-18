@@ -5937,22 +5937,23 @@ void vdp_reg_write(vdp_context *context, uint16_t reg, uint16_t value)
 				context->kmod_buffer_length = 0;
 			}
 		} else if (reg == REG_KMOD_TIMER) {
-			if (!control_active()) {
-				if (!(value & 0x80)) {
-					if (is_stdout_enabled()) {
-						init_terminal();
-						printf("KDEBUG TIMER: %d\n", (context->cycles - context->timer_start_cycle) / 7);
-					} else {
-						// GDB remote debugging is enabled, use stderr instead
-						fprintf(stderr, "KDEBUG TIMER: %d\n", (context->cycles - context->timer_start_cycle) / 7);
-					}
+			// Only the stop/report write (0x80 clear) reports elapsed; the start
+			// write (0x80 set) just resets the origin below. Guarding the event
+			// with the same condition as the stdout print keeps StartTimer from
+			// emitting a spurious kdebug_timer over the control channel.
+			if (!(value & 0x80)) {
+				uint32_t elapsed = (context->cycles - context->timer_start_cycle) / 7;
+				if (control_active()) {
+					char body[64];
+					snprintf(body, sizeof(body), "\"event\":\"kdebug_timer\",\"cycles\":%u", elapsed);
+					control_send_event(body);
+				} else if (is_stdout_enabled()) {
+					init_terminal();
+					printf("KDEBUG TIMER: %d\n", elapsed);
+				} else {
+					// GDB remote debugging is enabled, use stderr instead
+					fprintf(stderr, "KDEBUG TIMER: %d\n", elapsed);
 				}
-			}
-			if (control_active()) {
-				char body[64];
-				snprintf(body, sizeof(body), "\"event\":\"kdebug_timer\",\"cycles\":%u",
-					(context->cycles - context->timer_start_cycle) / 7);
-				control_send_event(body);
 			}
 			if (value & 0xC0) {
 				context->timer_start_cycle = context->cycles;
