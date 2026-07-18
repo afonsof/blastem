@@ -789,7 +789,6 @@ int main(int argc, char ** argv)
 	}
 	if (control_port) {
 		control_init(control_port);
-		control_pause_loop(current_system);
 	}
 	current_system->start_context(current_system,  menu ? NULL : statefile);
 	render_video_loop();

@@ -10,5 +10,7 @@ int control_active(void);
 void control_send_event(const char *json_body);
 int control_dispatch(char *line);
 void control_pause_loop(void *sys);
+void control_frame_boundary(void *sys, unsigned int elapsed_frames);
+void control_poll(void *sys);
 
 #endif
