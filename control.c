@@ -18,6 +18,8 @@
 #include "blastem.h"
 #include "util.h"
 #include "version.inc"
+#include "io.h"
+#include "genesis.h"
 
 int control_enabled = 0;
 static int control_sock = -1;
@@ -136,6 +138,57 @@ static unsigned long control_frame = 0;   // frames since boot
 static int step_remaining = 0;            // >0 while a step is in progress
 static int running = 0;                   // free-run mode
 
+static uint16_t pad_desired = 0;   // bitmask of buttons requested
+static uint16_t pad_applied = 0;   // bitmask currently pressed on io
+
+typedef struct { const char *name; uint8_t button; uint16_t bit; } btn_map;
+static const btn_map BTN_MAP[] = {
+	{"UP", DPAD_UP, 1<<0}, {"DOWN", DPAD_DOWN, 1<<1},
+	{"LEFT", DPAD_LEFT, 1<<2}, {"RIGHT", DPAD_RIGHT, 1<<3},
+	{"A", BUTTON_A, 1<<4}, {"B", BUTTON_B, 1<<5}, {"C", BUTTON_C, 1<<6},
+	{"START", BUTTON_START, 1<<7}, {"X", BUTTON_X, 1<<8}, {"Y", BUTTON_Y, 1<<9},
+	{"Z", BUTTON_Z, 1<<10}, {"MODE", BUTTON_MODE, 1<<11},
+};
+#define BTN_COUNT (int)(sizeof(BTN_MAP)/sizeof(BTN_MAP[0]))
+
+static const btn_map *find_btn(const char *name, int len)
+{
+	for (int i = 0; i < BTN_COUNT; i++) {
+		if ((int)strlen(BTN_MAP[i].name) == len && !strncmp(BTN_MAP[i].name, name, len))
+			return &BTN_MAP[i];
+	}
+	return NULL;
+}
+
+// Parse "A,DOWN,START" into a bitmask. Returns -1 on unknown button.
+static int parse_pad(const char *args)
+{
+	uint16_t mask = 0;
+	const char *p = args;
+	while (*p) {
+		const char *start = p;
+		while (*p && *p != ',') p++;
+		const btn_map *b = find_btn(start, (int)(p - start));
+		if (!b) return -1;
+		mask |= b->bit;
+		if (*p == ',') p++;
+	}
+	return mask;
+}
+
+// Apply pad_desired vs pad_applied via io_gamepad_down/up on pad 1 (index 0).
+static void control_apply_pad(void *sys)
+{
+	genesis_context *gen = (genesis_context *)sys;
+	uint16_t changed = pad_desired ^ pad_applied;
+	for (int i = 0; i < BTN_COUNT; i++) {
+		if (!(changed & BTN_MAP[i].bit)) continue;
+		if (pad_desired & BTN_MAP[i].bit) io_gamepad_down(&gen->io, 0, BTN_MAP[i].button);
+		else io_gamepad_up(&gen->io, 0, BTN_MAP[i].button);
+	}
+	pad_applied = pad_desired;
+}
+
 static void send_frame_result(void)
 {
 	char body[64];
@@ -174,7 +227,23 @@ int control_dispatch(char *line)
 		send_frame_result();
 		return 0;
 	}
-	// pad/screenshot/reset added in Tasks 9-10
+	if (!strcmp(line, "pad") || !strncmp(line, "pad ", 4)) {
+		const char *args = (line[3] == ' ') ? line + 4 : "";
+		int mask = args[0] ? parse_pad(args) : 0;
+		if (mask < 0) { control_send_err("unknown button"); return 0; }
+		pad_desired = (uint16_t)mask;
+		// echo the normalized set
+		char body[256]; int n = snprintf(body, sizeof(body), "\"buttons\":[");
+		int first = 1;
+		for (int i = 0; i < BTN_COUNT; i++) if (pad_desired & BTN_MAP[i].bit) {
+			n += snprintf(body+n, sizeof(body)-n, "%s\"%s\"", first?"":",", BTN_MAP[i].name);
+			first = 0;
+		}
+		snprintf(body+n, sizeof(body)-n, "]");
+		control_send_ok(body);
+		return 0;
+	}
+	// screenshot/reset added in Task 10
 	control_send_err("unknown command");
 	return 0;
 }
@@ -201,6 +270,7 @@ void control_frame_boundary(void *sys, unsigned int elapsed)
 {
 	if (control_sock < 0) return;
 	control_frame += elapsed;
+	control_apply_pad(sys);
 
 	if (step_remaining > 0) {
 		step_remaining -= (int)elapsed;
