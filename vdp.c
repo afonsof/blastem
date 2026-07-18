@@ -13,6 +13,7 @@
 #include "event_log.h"
 #include "terminal.h"
 #include "png.h"
+#include "control.h"
 #ifndef DISABLE_NUKLEAR
 #include "nuklear_ui/debug_ui.h"
 #endif
@@ -5920,6 +5921,17 @@ void vdp_reg_write(vdp_context *context, uint16_t reg, uint16_t value)
 					// GDB remote debugging is enabled, use stderr instead
 					fprintf(stderr, "KDEBUG MESSAGE: %s\n", context->kmod_msg_buffer);
 				}
+				if (control_active()) {
+					char body[1100];
+					// naive escape: drop embedded quotes/backslashes to keep JSON valid
+					char safe[1024]; int s = 0;
+					for (char *p = (char*)context->kmod_msg_buffer; *p && s < (int)sizeof(safe)-1; p++) {
+						if (*p != '"' && *p != '\\') safe[s++] = *p;
+					}
+					safe[s] = 0;
+					snprintf(body, sizeof(body), "\"event\":\"kdebug\",\"message\":\"%s\"", safe);
+					control_send_event(body);
+				}
 				context->kmod_buffer_length = 0;
 			}
 		} else if (reg == REG_KMOD_TIMER) {
@@ -5931,6 +5943,12 @@ void vdp_reg_write(vdp_context *context, uint16_t reg, uint16_t value)
 					// GDB remote debugging is enabled, use stderr instead
 					fprintf(stderr, "KDEBUG TIMER: %d\n", (context->cycles - context->timer_start_cycle) / 7);
 				}
+			}
+			if (control_active()) {
+				char body[64];
+				snprintf(body, sizeof(body), "\"event\":\"kdebug_timer\",\"cycles\":%u",
+					(context->cycles - context->timer_start_cycle) / 7);
+				control_send_event(body);
 			}
 			if (value & 0xC0) {
 				context->timer_start_cycle = context->cycles;
