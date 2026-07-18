@@ -27,6 +27,8 @@ void control_send_event(const char *json_body)
 	if (control_sock < 0) return;
 	char line[1024];
 	int n = snprintf(line, sizeof(line), "{%s}\n", json_body);
+	if (n < 0) n = 0;
+	else if (n >= (int)sizeof(line)) n = (int)sizeof(line) - 1;
 	send(control_sock, line, n, 0);
 }
 
@@ -35,6 +37,8 @@ static void control_send_ok(const char *result_body)
 	char line[1200];
 	int n = snprintf(line, sizeof(line), "{\"ok\":true,\"result\":{%s}}\n",
 		result_body ? result_body : "");
+	if (n < 0) n = 0;
+	else if (n >= (int)sizeof(line)) n = (int)sizeof(line) - 1;
 	send(control_sock, line, n, 0);
 }
 
@@ -42,6 +46,8 @@ static void control_send_err(const char *msg)
 {
 	char line[512];
 	int n = snprintf(line, sizeof(line), "{\"ok\":false,\"error\":\"%s\"}\n", msg);
+	if (n < 0) n = 0;
+	else if (n >= (int)sizeof(line)) n = (int)sizeof(line) - 1;
 	send(control_sock, line, n, 0);
 }
 
@@ -100,6 +106,8 @@ void control_init(int port)
 	char hello[128];
 	int n = snprintf(hello, sizeof(hello),
 		"{\"event\":\"hello\",\"version\":\"%s\",\"protocol\":1}\n", BLASTEM_VERSION);
+	if (n < 0) n = 0;
+	else if (n >= (int)sizeof(hello)) n = (int)sizeof(hello) - 1;
 	send(control_sock, hello, n, 0);
 }
 
