@@ -361,7 +361,9 @@ void control_poll(void *sys)
 	set_nonblocking(control_sock, 1);
 	char line[2048];
 	for (;;) {
-		int got = recv(control_sock, rx + rx_len, (int)sizeof(rx) - rx_len, 0);
+		int space = (int)sizeof(rx) - rx_len;
+		if (space <= 0) { rx_len = 0; break; }  // buffer full with no newline: drop and stop polling this cycle
+		int got = recv(control_sock, rx + rx_len, space, 0);
 		if (got > 0) { rx_len += got; continue; }
 		if (got == 0) {          // peer closed the connection
 			CTL_CLOSE(control_sock);

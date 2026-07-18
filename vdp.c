@@ -5925,10 +5925,10 @@ void vdp_reg_write(vdp_context *context, uint16_t reg, uint16_t value)
 				}
 				if (control_active()) {
 					char body[1100];
-					// naive escape: drop embedded quotes/backslashes to keep JSON valid
+					// naive escape: drop embedded quotes/backslashes and control chars (incl. \n \r \t) to keep JSON valid and line-framed
 					char safe[900]; int s = 0;
 					for (char *p = (char*)context->kmod_msg_buffer; *p && s < (int)sizeof(safe)-1; p++) {
-						if (*p != '"' && *p != '\\') safe[s++] = *p;
+						if (*p != '"' && *p != '\\' && (unsigned char)*p >= 0x20) safe[s++] = *p;
 					}
 					safe[s] = 0;
 					snprintf(body, sizeof(body), "\"event\":\"kdebug\",\"message\":\"%s\"", safe);
