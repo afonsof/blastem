@@ -28,6 +28,7 @@
 #include "cdimage.h"
 #include "event_log.h"
 #include "movie.h"
+#include "control.h"
 #ifndef DISABLE_NUKLEAR
 #include "nuklear_ui/blastem_nuklear.h"
 #endif
@@ -45,6 +46,7 @@
 #endif
 
 int headless = 0;
+static int control_port = 0;
 int exit_after = 0;
 int z80_enabled = 1;
 int frame_limit = 0;
@@ -514,6 +516,11 @@ int main(int argc, char ** argv)
 					headless = 1;
 					continue;
 				}
+				if (!strcmp(argv[i] + 2, "control") && i + 1 < argc) {
+					control_port = atoi(argv[++i]);
+					headless = 1;
+					continue;
+				}
 				fatal_error("Unrecognized switch %s\n", argv[i]);
 				break;
 			case 'm':
@@ -779,6 +786,10 @@ int main(int argc, char ** argv)
 		} else {
 			movie_play_pre_inject(current_system);
 		}
+	}
+	if (control_port) {
+		control_init(control_port);
+		control_pause_loop(current_system);
 	}
 	current_system->start_context(current_system,  menu ? NULL : statefile);
 	render_video_loop();
