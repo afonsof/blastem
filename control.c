@@ -16,6 +16,7 @@
 #endif
 #include "control.h"
 #include "blastem.h"
+#include "system.h"
 #include "util.h"
 #include "version.inc"
 #include "io.h"
@@ -196,6 +197,27 @@ static void send_frame_result(void)
 	control_send_ok(body);
 }
 
+static char *b64_encode_file(const char *path, int *out_len)
+{
+	FILE *f = fopen(path, "rb");
+	if (!f) return NULL;
+	fseek(f, 0, SEEK_END); long sz = ftell(f); fseek(f, 0, SEEK_SET);
+	unsigned char *buf = malloc(sz);
+	fread(buf, 1, sz, f); fclose(f);
+	static const char *T = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+	char *out = malloc(((sz + 2) / 3) * 4 + 1);
+	int o = 0;
+	for (long i = 0; i < sz; i += 3) {
+		int n = (buf[i] << 16) | (i+1 < sz ? buf[i+1] << 8 : 0) | (i+2 < sz ? buf[i+2] : 0);
+		out[o++] = T[(n >> 18) & 63];
+		out[o++] = T[(n >> 12) & 63];
+		out[o++] = (i+1 < sz) ? T[(n >> 6) & 63] : '=';
+		out[o++] = (i+2 < sz) ? T[n & 63] : '=';
+	}
+	out[o] = 0; *out_len = o; free(buf);
+	return out;
+}
+
 // Dispatch a single request line. Returns:
 //   0 = handled inline (reply already sent), stay paused
 //   1 = advance the emulator (step/run); reply is sent at the next boundary
@@ -243,7 +265,34 @@ int control_dispatch(char *line)
 		control_send_ok(body);
 		return 0;
 	}
-	// screenshot/reset added in Task 10
+	if (!strcmp(line, "screenshot") || !strncmp(line, "screenshot ", 11)) {
+		const char *path = (line[10] == ' ') ? line + 11 : NULL;
+		if (path && *path) {
+			if (save_screenshot(path)) {
+				char body[1100]; snprintf(body, sizeof(body), "\"path\":\"%s\"", path);
+				control_send_ok(body);
+			} else {
+				control_send_err("screenshot failed");
+			}
+		} else {
+			char tmp[] = "/tmp/emocre_ctl_shot.png";
+			if (!save_screenshot(tmp)) { control_send_err("screenshot failed"); return 0; }
+			int len; char *b64 = b64_encode_file(tmp, &len);
+			if (!b64) { control_send_err("screenshot read failed"); return 0; }
+			char *msg = malloc(len + 64);
+			int n = snprintf(msg, len + 64, "{\"ok\":true,\"result\":{\"png_base64\":\"%s\"}}\n", b64);
+			send(control_sock, msg, n, 0);
+			free(b64); free(msg);
+		}
+		return 0;
+	}
+	if (!strcmp(line, "reset") || !strcmp(line, "reset hard")) {
+		if (current_system && current_system->soft_reset) {
+			current_system->soft_reset(current_system);
+		}
+		control_send_ok("\"ok\":true");
+		return 0;
+	}
 	control_send_err("unknown command");
 	return 0;
 }
