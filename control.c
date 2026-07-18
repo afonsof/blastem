@@ -240,7 +240,12 @@ void control_poll(void *sys)
 	for (;;) {
 		int got = recv(control_sock, rx + rx_len, (int)sizeof(rx) - rx_len, 0);
 		if (got > 0) { rx_len += got; continue; }
-		break;
+		if (got == 0) {          // peer closed the connection
+			CTL_CLOSE(control_sock);
+			control_sock = -1;
+			exit(0);
+		}
+		break;                    // got < 0: no data available right now
 	}
 	set_nonblocking(control_sock, 0);
 	// dispatch any complete lines currently buffered
