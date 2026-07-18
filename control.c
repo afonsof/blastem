@@ -202,10 +202,13 @@ static char *b64_encode_file(const char *path, int *out_len)
 	FILE *f = fopen(path, "rb");
 	if (!f) return NULL;
 	fseek(f, 0, SEEK_END); long sz = ftell(f); fseek(f, 0, SEEK_SET);
+	if (sz < 0) { fclose(f); return NULL; }
 	unsigned char *buf = malloc(sz);
+	if (!buf) { fclose(f); return NULL; }
 	fread(buf, 1, sz, f); fclose(f);
 	static const char *T = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 	char *out = malloc(((sz + 2) / 3) * 4 + 1);
+	if (!out) { free(buf); return NULL; }
 	int o = 0;
 	for (long i = 0; i < sz; i += 3) {
 		int n = (buf[i] << 16) | (i+1 < sz ? buf[i+1] << 8 : 0) | (i+2 < sz ? buf[i+2] : 0);
@@ -280,6 +283,7 @@ int control_dispatch(char *line)
 			int len; char *b64 = b64_encode_file(tmp, &len);
 			if (!b64) { control_send_err("screenshot read failed"); return 0; }
 			char *msg = malloc(len + 64);
+			if (!msg) { free(b64); control_send_err("out of memory"); return 0; }
 			int n = snprintf(msg, len + 64, "{\"ok\":true,\"result\":{\"png_base64\":\"%s\"}}\n", b64);
 			send(control_sock, msg, n, 0);
 			free(b64); free(msg);
