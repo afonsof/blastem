@@ -5914,17 +5914,19 @@ void vdp_reg_write(vdp_context *context, uint16_t reg, uint16_t value)
 				context->kmod_msg_buffer[context->kmod_buffer_length - 1] = c;
 			} else if (context->kmod_buffer_length) {
 				context->kmod_msg_buffer[context->kmod_buffer_length] = 0;
-				if (is_stdout_enabled()) {
-					init_terminal();
-					printf("KDEBUG MESSAGE: %s\n", context->kmod_msg_buffer);
-				} else {
-					// GDB remote debugging is enabled, use stderr instead
-					fprintf(stderr, "KDEBUG MESSAGE: %s\n", context->kmod_msg_buffer);
+				if (!control_active()) {
+					if (is_stdout_enabled()) {
+						init_terminal();
+						printf("KDEBUG MESSAGE: %s\n", context->kmod_msg_buffer);
+					} else {
+						// GDB remote debugging is enabled, use stderr instead
+						fprintf(stderr, "KDEBUG MESSAGE: %s\n", context->kmod_msg_buffer);
+					}
 				}
 				if (control_active()) {
 					char body[1100];
 					// naive escape: drop embedded quotes/backslashes to keep JSON valid
-					char safe[1024]; int s = 0;
+					char safe[900]; int s = 0;
 					for (char *p = (char*)context->kmod_msg_buffer; *p && s < (int)sizeof(safe)-1; p++) {
 						if (*p != '"' && *p != '\\') safe[s++] = *p;
 					}
@@ -5935,13 +5937,15 @@ void vdp_reg_write(vdp_context *context, uint16_t reg, uint16_t value)
 				context->kmod_buffer_length = 0;
 			}
 		} else if (reg == REG_KMOD_TIMER) {
-			if (!(value & 0x80)) {
-				if (is_stdout_enabled()) {
-					init_terminal();
-					printf("KDEBUG TIMER: %d\n", (context->cycles - context->timer_start_cycle) / 7);
-				} else {
-					// GDB remote debugging is enabled, use stderr instead
-					fprintf(stderr, "KDEBUG TIMER: %d\n", (context->cycles - context->timer_start_cycle) / 7);
+			if (!control_active()) {
+				if (!(value & 0x80)) {
+					if (is_stdout_enabled()) {
+						init_terminal();
+						printf("KDEBUG TIMER: %d\n", (context->cycles - context->timer_start_cycle) / 7);
+					} else {
+						// GDB remote debugging is enabled, use stderr instead
+						fprintf(stderr, "KDEBUG TIMER: %d\n", (context->cycles - context->timer_start_cycle) / 7);
+					}
 				}
 			}
 			if (control_active()) {
