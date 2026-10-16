@@ -296,6 +296,25 @@ int control_dispatch(char *line)
 		}
 		return 0;
 	}
+	// layers <mask>: hide VDP layers in the rendered frame (screenshots included).
+	// Same bits as vdp->layer_disabled: 1 = BGA, 2 = BGB, 4 = sprites; 0 shows all.
+	if (!strncmp(line, "layers ", 7)) {
+		if (!current_system || current_system->type != SYSTEM_GENESIS) {
+			control_send_err("layers needs a Genesis system");
+			return 0;
+		}
+		char *end;
+		long mask = strtol(line + 7, &end, 0);
+		if (end == line + 7 || *end || mask < 0 || mask > 7) {
+			control_send_err("layers needs a mask 0-7 (1=BGA 2=BGB 4=sprites)");
+			return 0;
+		}
+		genesis_context *gen = (genesis_context *)current_system;
+		gen->vdp->layer_disabled = (uint8_t)mask;
+		char body[32]; snprintf(body, sizeof(body), "\"layers_disabled\":%ld", mask);
+		control_send_ok(body);
+		return 0;
+	}
 	if (!strcmp(line, "reset") || !strcmp(line, "reset hard")) {
 		if (current_system && current_system->soft_reset) {
 			current_system->soft_reset(current_system);
