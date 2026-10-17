@@ -285,9 +285,11 @@ int control_dispatch(char *line)
 				control_send_err("screenshot failed");
 			}
 		} else {
-			char tmp[] = "/tmp/emocre_ctl_shot.png";
+			// one file per process: several emulators run side by side
+			char tmp[64]; snprintf(tmp, sizeof(tmp), "/tmp/emocre_ctl_shot_%d.png", (int)getpid());
 			if (!save_screenshot(tmp)) { control_send_err("screenshot failed"); return 0; }
 			int len; char *b64 = b64_encode_file(tmp, &len);
+			remove(tmp);
 			if (!b64) { control_send_err("screenshot read failed"); return 0; }
 			char *msg = malloc(len + 64);
 			if (!msg) { free(b64); control_send_err("out of memory"); return 0; }
@@ -333,7 +335,8 @@ int control_dispatch(char *line)
 		genesis_context *gen = (genesis_context *)current_system;
 		uint8_t saved = gen->vdp->debug_modes[DEBUG_VRAM];
 		gen->vdp->debug_modes[DEBUG_VRAM] = pal;
-		const char *path = args[0] ? args : "/tmp/emocre_ctl_vram.png";
+		char tmp[64]; snprintf(tmp, sizeof(tmp), "/tmp/emocre_ctl_vram_%d.png", (int)getpid());
+		const char *path = args[0] ? args : tmp;
 		vdp_save_vram_image(gen->vdp, path);
 		gen->vdp->debug_modes[DEBUG_VRAM] = saved;
 		if (args[0]) {
@@ -342,6 +345,7 @@ int control_dispatch(char *line)
 			return 0;
 		}
 		int len; char *b64 = b64_encode_file(path, &len);
+		remove(path);
 		if (!b64) { control_send_err("vram read failed"); return 0; }
 		char *msg = malloc(len + 64);
 		if (!msg) { free(b64); control_send_err("out of memory"); return 0; }
