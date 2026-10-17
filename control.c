@@ -21,6 +21,7 @@
 #include "version.inc"
 #include "io.h"
 #include "genesis.h"
+#include "vdp.h"
 
 int control_enabled = 0;
 static int control_sock = -1;
@@ -313,6 +314,40 @@ int control_dispatch(char *line)
 		gen->vdp->layer_disabled = (uint8_t)mask;
 		char body[32]; snprintf(body, sizeof(body), "\"layers_disabled\":%ld", mask);
 		control_send_ok(body);
+		return 0;
+	}
+	// vram [pal] [path]: the whole VRAM as a 512x256 PNG (vdp_save_vram_image:
+	// 2048 tiles of 8x8, 64 per row, in address order), colored with CRAM
+	// palette line `pal` (0-3, default 0). Same reply as screenshot.
+	if (!strcmp(line, "vram") || !strncmp(line, "vram ", 5)) {
+		if (!current_system || current_system->type != SYSTEM_GENESIS) {
+			control_send_err("vram needs a Genesis system");
+			return 0;
+		}
+		const char *args = (line[4] == ' ') ? line + 5 : "";
+		int pal = 0;
+		if (args[0] >= '0' && args[0] <= '3' && (args[1] == 0 || args[1] == ' ')) {
+			pal = args[0] - '0';
+			args += args[1] ? 2 : 1;
+		}
+		genesis_context *gen = (genesis_context *)current_system;
+		uint8_t saved = gen->vdp->debug_modes[DEBUG_VRAM];
+		gen->vdp->debug_modes[DEBUG_VRAM] = pal;
+		const char *path = args[0] ? args : "/tmp/emocre_ctl_vram.png";
+		vdp_save_vram_image(gen->vdp, path);
+		gen->vdp->debug_modes[DEBUG_VRAM] = saved;
+		if (args[0]) {
+			char body[1100]; snprintf(body, sizeof(body), "\"path\":\"%s\",\"pal\":%d", path, pal);
+			control_send_ok(body);
+			return 0;
+		}
+		int len; char *b64 = b64_encode_file(path, &len);
+		if (!b64) { control_send_err("vram read failed"); return 0; }
+		char *msg = malloc(len + 64);
+		if (!msg) { free(b64); control_send_err("out of memory"); return 0; }
+		int n = snprintf(msg, len + 64, "{\"ok\":true,\"result\":{\"png_base64\":\"%s\"}}\n", b64);
+		send(control_sock, msg, n, 0);
+		free(b64); free(msg);
 		return 0;
 	}
 	if (!strcmp(line, "reset") || !strcmp(line, "reset hard")) {
