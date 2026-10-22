@@ -5931,7 +5931,9 @@ void vdp_reg_write(vdp_context *context, uint16_t reg, uint16_t value)
 						if (*p != '"' && *p != '\\' && (unsigned char)*p >= 0x20) safe[s++] = *p;
 					}
 					safe[s] = 0;
-					snprintf(body, sizeof(body), "\"event\":\"kdebug\",\"message\":\"%s\"", safe);
+					// vint: VInts the 68000 had acknowledged when it wrote the message,
+					// so a client can tell which "sound_state vint" latch comes after it
+					snprintf(body, sizeof(body), "\"event\":\"kdebug\",\"message\":\"%s\",\"vint\":%lu", safe, control_vint_count());
 					control_send_event(body);
 				}
 				context->kmod_buffer_length = 0;

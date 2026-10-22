@@ -1055,6 +1055,9 @@ static m68k_context *int_ack(m68k_context *context)
 		//printf("acknowledging %d @ %d:%d, vcounter: %d, hslot: %d\n", context->int_ack, context->cycles, v_context->cycles, v_context->vcounter, v_context->hslot);
 		vdp_run_context(v_context, context->cycles);
 		vdp_int_ack(v_context);
+		if (control_enabled && context->int_ack == 6) {
+			control_vint_ack(gen);
+		}
 	}
 
 	//the Genesis responds to these exclusively with !VPA which means its a slow

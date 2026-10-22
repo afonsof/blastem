@@ -199,6 +199,80 @@ static void control_apply_pad(void *sys)
 	pad_applied = pad_desired;
 }
 
+// Sound chip state in the fields of sound_state (see control_dispatch).
+typedef struct {
+	uint8_t  ym[2][256];
+	uint8_t  keyon[6];
+	uint8_t  dac_enabled, dac_value;
+	uint8_t  psg_volume[4];
+	uint16_t psg_tone[3];
+	uint8_t  psg_noise, psg_latch;
+} sound_snapshot;
+
+static sound_snapshot vint_snapshot;
+static unsigned long vint_count = 0;
+
+static int read_sound(void *sys, sound_snapshot *s)
+{
+	genesis_context *gen = (genesis_context *)sys;
+	ym2612_context *ym = gen->ym;
+	psg_context *psg = gen->psg;
+	if (!ym || !psg) return 0;
+	for (int part = 0; part < 2; part++) {
+		const uint8_t *regs = part ? ym->part2_regs : ym->part1_regs;
+		int start = part ? YM_PART2_START : YM_PART1_START;
+		for (int r = 0; r < 256; r++) {
+			s->ym[part][r] = (r >= start && r < YM_REG_END) ? regs[r - start] : 0;
+		}
+	}
+	for (int c = 0; c < 6; c++) s->keyon[c] = ym->channels[c].keyon >> 4;
+	s->dac_enabled = ym->dac_enable ? 1 : 0;
+	s->dac_value = ym->part1_regs[0x2A - YM_PART1_START];
+	for (int i = 0; i < 4; i++) s->psg_volume[i] = psg->volume[i];
+	for (int i = 0; i < 3; i++) s->psg_tone[i] = psg->counter_load[i];
+	// noise register reconstructed from the chip state, not the raw byte written
+	// (bit 2 = white, bits 0-1 = rate, rate 3 = follows tone 3)
+	int noise_rate = psg->noise_use_tone ? 3 : 0;
+	if (!psg->noise_use_tone) {
+		while (noise_rate < 2 && psg->counter_load[3] > (0x10u << noise_rate)) noise_rate++;
+	}
+	s->psg_noise = (psg->noise_type ? 4 : 0) | noise_rate;
+	s->psg_latch = psg->latch;
+	return 1;
+}
+
+static int format_sound(char *b, int cap, const sound_snapshot *s)
+{
+	int n = snprintf(b, cap, "\"ym\":[[");
+	for (int part = 0; part < 2; part++) {
+		for (int r = 0; r < 256; r++) {
+			n += snprintf(b + n, cap - n, "%s%d", r ? "," : "", s->ym[part][r]);
+		}
+		n += snprintf(b + n, cap - n, part ? "]]" : "],[");
+	}
+	n += snprintf(b + n, cap - n, ",\"keyon\":[");
+	for (int c = 0; c < 6; c++) {
+		n += snprintf(b + n, cap - n, "%s%d", c ? "," : "", s->keyon[c]);
+	}
+	n += snprintf(b + n, cap - n, "],\"dac_enabled\":%d,\"dac_value\":%d,\"psg\":{\"volume\":[%d,%d,%d,%d],\"tone\":[%d,%d,%d],\"noise\":%d,\"latch\":%d}",
+		s->dac_enabled, s->dac_value,
+		s->psg_volume[0], s->psg_volume[1], s->psg_volume[2], s->psg_volume[3],
+		s->psg_tone[0], s->psg_tone[1], s->psg_tone[2], s->psg_noise, s->psg_latch);
+	return n;
+}
+
+void control_vint_ack(void *sys)
+{
+	if (control_sock < 0) return;
+	vint_count++;
+	read_sound(sys, &vint_snapshot);
+}
+
+unsigned long control_vint_count(void)
+{
+	return vint_count;
+}
+
 static void send_frame_result(void)
 {
 	char body[64];
@@ -367,40 +441,24 @@ int control_dispatch(char *line)
 	//   That is the 0x28 slot order, not operator order. Channel 3's value
 	//   reflects reg 0x28 only; CSM-driven key-on is not included.
 	// - dac_value: last write to reg 0x2A, 0 before the first one.
-	if (!strcmp(line, "sound_state")) {
+	// "sound_state" reads the chips now (result starts with "frame"); "sound_state
+	// vint" returns the same fields latched when the 68000 last acknowledged VInt
+	// (result starts with "vint", the count of that VInt; 0 = none yet). A step
+	// ends a few lines after VInt, so the latch is the state at the frame's
+	// interrupt, before the VInt handler and the next frame's code run.
+	if (!strcmp(line, "sound_state") || !strcmp(line, "sound_state vint")) {
 		if (!current_system || current_system->type != SYSTEM_GENESIS) { control_send_err("sound_state needs a genesis system"); return 0; }
-		genesis_context *gen = (genesis_context *)current_system;
-		ym2612_context *ym = gen->ym;
-		psg_context *psg = gen->psg;
-		if (!ym || !psg) { control_send_err("no sound chips"); return 0; }
+		int latched = line[11] != 0;
+		sound_snapshot live;
+		if (!latched && !read_sound(current_system, &live)) { control_send_err("no sound chips"); return 0; }
 		const int cap = 8192;
 		char *b = malloc(cap);
 		if (!b) { control_send_err("out of memory"); return 0; }
-		int n = snprintf(b, cap, "{\"ok\":true,\"result\":{\"frame\":%lu,\"ym\":[[", control_frame);
-		for (int part = 0; part < 2; part++) {
-			const uint8_t *regs = part ? ym->part2_regs : ym->part1_regs;
-			int start = part ? YM_PART2_START : YM_PART1_START;
-			for (int r = 0; r < 256; r++) {
-				int v = (r >= start && r < YM_REG_END) ? regs[r - start] : 0;
-				n += snprintf(b + n, cap - n, "%s%d", r ? "," : "", v);
-			}
-			n += snprintf(b + n, cap - n, part ? "]]" : "],[");
-		}
-		n += snprintf(b + n, cap - n, ",\"keyon\":[");
-		for (int c = 0; c < 6; c++) {
-			n += snprintf(b + n, cap - n, "%s%d", c ? "," : "", ym->channels[c].keyon >> 4);
-		}
-		// noise register reconstructed from the chip state, not the raw byte written
-		// (bit 2 = white, bits 0-1 = rate, rate 3 = follows tone 3)
-		int noise_rate = psg->noise_use_tone ? 3 : 0;
-		if (!psg->noise_use_tone) {
-			while (noise_rate < 2 && psg->counter_load[3] > (0x10u << noise_rate)) noise_rate++;
-		}
-		n += snprintf(b + n, cap - n, "],\"dac_enabled\":%d,\"dac_value\":%d,\"psg\":{\"volume\":[%d,%d,%d,%d],\"tone\":[%d,%d,%d],\"noise\":%d,\"latch\":%d}}}\n",
-			ym->dac_enable ? 1 : 0, ym->part1_regs[0x2A - YM_PART1_START],
-			psg->volume[0], psg->volume[1], psg->volume[2], psg->volume[3],
-			psg->counter_load[0], psg->counter_load[1], psg->counter_load[2],
-			(psg->noise_type ? 4 : 0) | noise_rate, psg->latch);
+		int n = latched
+			? snprintf(b, cap, "{\"ok\":true,\"result\":{\"vint\":%lu,", vint_count)
+			: snprintf(b, cap, "{\"ok\":true,\"result\":{\"frame\":%lu,", control_frame);
+		n += format_sound(b + n, cap - n, latched ? &vint_snapshot : &live);
+		n += snprintf(b + n, cap - n, "}}\n");
 		send(control_sock, b, n, 0);
 		free(b);
 		return 0;
