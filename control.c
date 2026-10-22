@@ -22,6 +22,8 @@
 #include "io.h"
 #include "genesis.h"
 #include "vdp.h"
+#include "ym2612.h"
+#include "psg.h"
 
 int control_enabled = 0;
 static int control_sock = -1;
@@ -352,6 +354,46 @@ int control_dispatch(char *line)
 		int n = snprintf(msg, len + 64, "{\"ok\":true,\"result\":{\"png_base64\":\"%s\"}}\n", b64);
 		send(control_sock, msg, n, 0);
 		free(b64); free(msg);
+		return 0;
+	}
+	// sound_state: last value written to every YM2612 register (256 per part,
+	// indexed by register number; never-written registers read 0), per-channel
+	// key-on operator mask, DAC and PSG state. Pure read, safe while paused.
+	if (!strcmp(line, "sound_state")) {
+		if (!current_system || current_system->type != SYSTEM_GENESIS) { control_send_err("sound_state needs a genesis system"); return 0; }
+		genesis_context *gen = (genesis_context *)current_system;
+		ym2612_context *ym = gen->ym;
+		psg_context *psg = gen->psg;
+		if (!ym || !psg) { control_send_err("no sound chips"); return 0; }
+		const int cap = 8192;
+		char *b = malloc(cap);
+		if (!b) { control_send_err("out of memory"); return 0; }
+		int n = snprintf(b, cap, "{\"ok\":true,\"result\":{\"frame\":%lu,\"ym\":[[", control_frame);
+		for (int part = 0; part < 2; part++) {
+			const uint8_t *regs = part ? ym->part2_regs : ym->part1_regs;
+			int start = part ? YM_PART2_START : YM_PART1_START;
+			for (int r = 0; r < 256; r++) {
+				int v = (r >= start && r < YM_REG_END) ? regs[r - start] : 0;
+				n += snprintf(b + n, cap - n, "%s%d", r ? "," : "", v);
+			}
+			n += snprintf(b + n, cap - n, part ? "]]" : "],[");
+		}
+		n += snprintf(b + n, cap - n, ",\"keyon\":[");
+		for (int c = 0; c < 6; c++) {
+			n += snprintf(b + n, cap - n, "%s%d", c ? "," : "", ym->channels[c].keyon >> 4);
+		}
+		// noise register as written (bit 2 = white, bits 0-1 = rate, 3 = follow tone 3)
+		int noise_rate = psg->noise_use_tone ? 3 : 0;
+		if (!psg->noise_use_tone) {
+			while (noise_rate < 2 && psg->counter_load[3] > (0x10u << noise_rate)) noise_rate++;
+		}
+		n += snprintf(b + n, cap - n, "],\"dac_enabled\":%d,\"dac_value\":%d,\"psg\":{\"volume\":[%d,%d,%d,%d],\"tone\":[%d,%d,%d],\"noise\":%d,\"latch\":%d}}}\n",
+			ym->dac_enable ? 1 : 0, ym->part1_regs[0x2A - YM_PART1_START],
+			psg->volume[0], psg->volume[1], psg->volume[2], psg->volume[3],
+			psg->counter_load[0], psg->counter_load[1], psg->counter_load[2],
+			(psg->noise_type ? 4 : 0) | noise_rate, psg->latch);
+		send(control_sock, b, n, 0);
+		free(b);
 		return 0;
 	}
 	if (!strcmp(line, "reset") || !strcmp(line, "reset hard")) {
