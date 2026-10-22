@@ -357,8 +357,16 @@ int control_dispatch(char *line)
 		return 0;
 	}
 	// sound_state: last value written to every YM2612 register (256 per part,
-	// indexed by register number; never-written registers read 0), per-channel
-	// key-on operator mask, DAC and PSG state. Pure read, safe while paused.
+	// indexed by register number), per-channel key-on mask, DAC and PSG state.
+	// Pure read, safe while paused.
+	// - ym: a register never written and one written with 0 both read 0; only
+	//   the registers BlastEm stores are filled (part 0: 0x21..0xB7, part 1: 0x30..0xB7).
+	// - keyon: keyon>>4 of BlastEm's channel keyon, in the order of reg 0x28
+	//   slot bits (keyon_bits {0x10,0x40,0x20,0x80}): bit0 = op1 (0x28 bit4),
+	//   bit1 = op3 (0x28 bit5), bit2 = op2 (0x28 bit6), bit3 = op4 (0x28 bit7).
+	//   That is the 0x28 slot order, not operator order. Channel 3's value
+	//   reflects reg 0x28 only; CSM-driven key-on is not included.
+	// - dac_value: last write to reg 0x2A, 0 before the first one.
 	if (!strcmp(line, "sound_state")) {
 		if (!current_system || current_system->type != SYSTEM_GENESIS) { control_send_err("sound_state needs a genesis system"); return 0; }
 		genesis_context *gen = (genesis_context *)current_system;
@@ -382,7 +390,8 @@ int control_dispatch(char *line)
 		for (int c = 0; c < 6; c++) {
 			n += snprintf(b + n, cap - n, "%s%d", c ? "," : "", ym->channels[c].keyon >> 4);
 		}
-		// noise register as written (bit 2 = white, bits 0-1 = rate, 3 = follow tone 3)
+		// noise register reconstructed from the chip state, not the raw byte written
+		// (bit 2 = white, bits 0-1 = rate, rate 3 = follows tone 3)
 		int noise_rate = psg->noise_use_tone ? 3 : 0;
 		if (!psg->noise_use_tone) {
 			while (noise_rate < 2 && psg->counter_load[3] > (0x10u << noise_rate)) noise_rate++;
