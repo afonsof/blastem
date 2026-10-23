@@ -24,6 +24,7 @@
 #include "vdp.h"
 #include "ym2612.h"
 #include "psg.h"
+#include "png.h"
 
 int control_enabled = 0;
 static int control_sock = -1;
@@ -261,11 +262,48 @@ static int format_sound(char *b, int cap, const sound_snapshot *s)
 	return n;
 }
 
+// Frame latched at the VInt ack: a copy of the VDP framebuffer, same layout as
+// the "screenshot" PNG (indexed, 347x240 in H40 / 283x240 in H32, with borders).
+// The headless VDP draws every line of the frame into one buffer before VInt,
+// so at the ack the buffer holds the whole frame that was just displayed.
+static pixel_t *vint_fb = NULL;
+static size_t vint_fb_cap = 0;
+static uint32_t vint_fb_w, vint_fb_h, vint_fb_pitch;
+
+static void latch_frame(void)
+{
+	if (!current_system || !current_system->get_vdp) return;
+	vdp_context *v = current_system->get_vdp(current_system);
+	if (!v || !v->fb) return;
+	uint32_t w = ((v->regs[REG_MODE_4] & BIT_H40) ? 320 : 256) + HORIZ_BORDER;
+	uint32_t h = v->inactive_start + v->border_bot + v->border_top;
+	size_t bytes = (size_t)v->output_pitch * h;
+	if (bytes > vint_fb_cap) {
+		pixel_t *n = realloc(vint_fb, bytes);
+		if (!n) return;
+		vint_fb = n;
+		vint_fb_cap = bytes;
+	}
+	memcpy(vint_fb, v->fb, bytes);
+	vint_fb_w = w; vint_fb_h = h; vint_fb_pitch = v->output_pitch;
+}
+
+static int save_latched_frame(const char *path)
+{
+	if (!vint_fb) return 0;
+	FILE *f = fopen(path, "wb");
+	if (!f) return 0;
+	save_png(f, vint_fb, vint_fb_w, vint_fb_h, vint_fb_pitch);
+	fclose(f);
+	return 1;
+}
+
 void control_vint_ack(void *sys)
 {
 	if (control_sock < 0) return;
 	vint_count++;
 	read_sound(sys, &vint_snapshot);
+	latch_frame();
 }
 
 unsigned long control_vint_count(void)
@@ -351,11 +389,19 @@ int control_dispatch(char *line)
 		control_send_ok(body);
 		return 0;
 	}
+	// "screenshot vint [path]": the frame latched at the last VInt ack, with that
+	// VInt's count ("vint" in the reply); 0 = none yet. Plain "screenshot [path]"
+	// is the live framebuffer, unchanged.
 	if (!strcmp(line, "screenshot") || !strncmp(line, "screenshot ", 11)) {
-		const char *path = (line[10] == ' ') ? line + 11 : NULL;
+		int latched = !strcmp(line, "screenshot vint") || !strncmp(line, "screenshot vint ", 16);
+		const char *path = latched ? (line[15] == ' ' ? line + 16 : NULL) : ((line[10] == ' ') ? line + 11 : NULL);
+		if (latched && !vint_fb) { control_send_err("no latched frame yet"); return 0; }
+		#define SHOT(p) (latched ? save_latched_frame(p) : save_screenshot(p))
 		if (path && *path) {
-			if (save_screenshot(path)) {
-				char body[1100]; snprintf(body, sizeof(body), "\"path\":\"%s\"", path);
+			if (SHOT(path)) {
+				char body[1100];
+				if (latched) snprintf(body, sizeof(body), "\"vint\":%lu,\"path\":\"%s\"", vint_count, path);
+				else snprintf(body, sizeof(body), "\"path\":\"%s\"", path);
 				control_send_ok(body);
 			} else {
 				control_send_err("screenshot failed");
@@ -363,16 +409,19 @@ int control_dispatch(char *line)
 		} else {
 			// one file per process: several emulators run side by side
 			char tmp[64]; snprintf(tmp, sizeof(tmp), "/tmp/emocre_ctl_shot_%d.png", (int)getpid());
-			if (!save_screenshot(tmp)) { control_send_err("screenshot failed"); return 0; }
+			if (!SHOT(tmp)) { control_send_err("screenshot failed"); return 0; }
 			int len; char *b64 = b64_encode_file(tmp, &len);
 			remove(tmp);
 			if (!b64) { control_send_err("screenshot read failed"); return 0; }
-			char *msg = malloc(len + 64);
+			char *msg = malloc(len + 96);
 			if (!msg) { free(b64); control_send_err("out of memory"); return 0; }
-			int n = snprintf(msg, len + 64, "{\"ok\":true,\"result\":{\"png_base64\":\"%s\"}}\n", b64);
+			int n = latched
+				? snprintf(msg, len + 96, "{\"ok\":true,\"result\":{\"vint\":%lu,\"png_base64\":\"%s\"}}\n", vint_count, b64)
+				: snprintf(msg, len + 96, "{\"ok\":true,\"result\":{\"png_base64\":\"%s\"}}\n", b64);
 			send(control_sock, msg, n, 0);
 			free(b64); free(msg);
 		}
+		#undef SHOT
 		return 0;
 	}
 	// layers <mask>: hide VDP layers in the rendered frame (screenshots included).
