@@ -25,6 +25,7 @@
 #include "ym2612.h"
 #include "psg.h"
 #include "png.h"
+#include "backend.h"
 
 int control_enabled = 0;
 static int control_sock = -1;
@@ -342,6 +343,66 @@ static char *b64_encode_file(const char *path, int *out_len)
 	return out;
 }
 
+// Longest request line the server reads (control_pause_loop/control_poll);
+// longer lines are truncated, so poke rejects a line that fills it.
+#define CONTROL_LINE_MAX 2048
+#define PEEK_MAX 65536
+
+// Parses one unsigned number (decimal or 0x hex) at *p, then skips the spaces
+// after it. Returns 0 if there is no number or it is followed by junk.
+static int parse_u32(const char **p, uint32_t *out)
+{
+	char *end;
+	while (**p == ' ') (*p)++;
+	if (**p < '0' || **p > '9') return 0;
+	unsigned long v = strtoul(*p, &end, 0);
+	if (*end && *end != ' ') return 0;
+	*out = (uint32_t)v;
+	*p = end;
+	while (**p == ' ') (*p)++;
+	return 1;
+}
+
+// Work RAM: 64 KB mirrored over 0xE00000-0xFFFFFF.
+static int is_ram_range(uint32_t addr, uint32_t len)
+{
+	return addr >= 0xE00000 && addr <= 0xFFFFFF && len <= 0x1000000 - addr;
+}
+
+static uint8_t *ram_ptr(genesis_context *gen, uint32_t addr)
+{
+	// work_ram holds native-endian words: byte n of the bus is at n ^ 1
+	// (the same access as the Z80 banked write in genesis.c)
+	return ((uint8_t *)gen->work_ram) + ((addr & 0xFFFF) ^ 1);
+}
+
+// 1 if addr is backed by a plain memory buffer (ROM, or SRAM mapped as one),
+// so reading it calls no handler and has no side effect.
+static int is_direct_readable(m68k_context *m, uint32_t addr)
+{
+	memmap_chunk const *chunk = find_map_chunk(addr, &m->opts->gen, 0, NULL);
+	if (!chunk || !(chunk->flags & MMAP_READ)) return 0;
+	void *base = (chunk->flags & MMAP_PTR_IDX) ? m->mem_pointers[chunk->ptr_index] : chunk->buffer;
+	return base != NULL;
+}
+
+// Sends {"ok":true,"result":{<head>,"hex":"<data>"}}; head has no braces.
+static void send_hex_result(const char *head, const uint8_t *data, uint32_t len)
+{
+	static const char *H = "0123456789abcdef";
+	size_t cap = strlen(head) + (size_t)len * 2 + 64;
+	char *msg = malloc(cap);
+	if (!msg) { control_send_err("out of memory"); return; }
+	int n = snprintf(msg, cap, "{\"ok\":true,\"result\":{%s,\"hex\":\"", head);
+	for (uint32_t i = 0; i < len; i++) {
+		msg[n++] = H[data[i] >> 4];
+		msg[n++] = H[data[i] & 0xF];
+	}
+	n += snprintf(msg + n, cap - n, "\"}}\n");
+	send(control_sock, msg, n, 0);
+	free(msg);
+}
+
 // Dispatch a single request line. Returns:
 //   0 = handled inline (reply already sent), stay paused
 //   1 = advance the emulator (step/run); reply is sent at the next boundary
@@ -512,6 +573,97 @@ int control_dispatch(char *line)
 		free(b);
 		return 0;
 	}
+	// peek <addr> <len>: read len (1-65536) bytes of the 68000 address space
+	// with no side effects. Allowed: work RAM (0xE00000-0xFFFFFF, 64 KB
+	// mirrored) and cartridge space backed by a plain buffer (ROM). I/O, Z80,
+	// VDP and handler-mapped ranges are refused. Reply {"addr","hex"}.
+	if (!strncmp(line, "peek ", 5)) {
+		if (!current_system || current_system->type != SYSTEM_GENESIS) { control_send_err("peek needs a Genesis system"); return 0; }
+		const char *p = line + 5;
+		uint32_t addr, len;
+		if (!parse_u32(&p, &addr) || !parse_u32(&p, &len) || *p) { control_send_err("peek needs <addr> <len>"); return 0; }
+		if (!len || len > PEEK_MAX) { control_send_err("peek len must be 1-65536"); return 0; }
+		genesis_context *gen = (genesis_context *)current_system;
+		uint8_t *buf = malloc(len);
+		if (!buf) { control_send_err("out of memory"); return 0; }
+		if (is_ram_range(addr, len)) {
+			for (uint32_t i = 0; i < len; i++) buf[i] = *ram_ptr(gen, addr + i);
+		} else if (addr < 0x400000 && len <= 0x400000 - addr) {
+			for (uint32_t i = 0; i < len; i++) {
+				if (!is_direct_readable(gen->m68k, addr + i)) {
+					free(buf);
+					control_send_err("peek range is not plain ROM/RAM (I/O or mapper handler)");
+					return 0;
+				}
+				buf[i] = read_byte(addr + i, (void **)gen->m68k->mem_pointers, &gen->m68k->opts->gen, gen->m68k);
+			}
+		} else {
+			free(buf);
+			control_send_err("peek only reads cartridge ROM (0x000000-0x3FFFFF) or work RAM (0xE00000-0xFFFFFF)");
+			return 0;
+		}
+		char head[32]; snprintf(head, sizeof(head), "\"addr\":%u", addr);
+		send_hex_result(head, buf, len);
+		free(buf);
+		return 0;
+	}
+	// poke <addr> <hexbytes>: write bytes into work RAM (0xE00000-0xFFFFFF)
+	// only. The whole line must fit in CONTROL_LINE_MAX (about 1000 bytes per
+	// poke). Reply {"addr","len"}.
+	if (!strncmp(line, "poke ", 5)) {
+		if (!current_system || current_system->type != SYSTEM_GENESIS) { control_send_err("poke needs a Genesis system"); return 0; }
+		if (strlen(line) >= CONTROL_LINE_MAX - 1) { control_send_err("poke line too long; split the write"); return 0; }
+		const char *p = line + 5;
+		uint32_t addr;
+		if (!parse_u32(&p, &addr) || !*p) { control_send_err("poke needs <addr> <hexbytes>"); return 0; }
+		size_t hexlen = strlen(p);
+		if (hexlen % 2 || strspn(p, "0123456789abcdefABCDEF") != hexlen) { control_send_err("poke bytes must be an even number of hex digits"); return 0; }
+		uint32_t len = (uint32_t)(hexlen / 2);
+		if (!is_ram_range(addr, len)) { control_send_err("poke only writes work RAM (0xE00000-0xFFFFFF)"); return 0; }
+		genesis_context *gen = (genesis_context *)current_system;
+		for (uint32_t i = 0; i < len; i++) {
+			char byte[3] = {p[2*i], p[2*i+1], 0};
+			*ram_ptr(gen, addr + i) = (uint8_t)strtoul(byte, NULL, 16);
+		}
+		// RAM may hold 68000 code (a no-op on the interpreter core)
+		m68k_invalidate_code_range(gen->m68k, 0xE00000, 0x1000000);
+		char body[48]; snprintf(body, sizeof(body), "\"addr\":%u,\"len\":%u", addr, len);
+		control_send_ok(body);
+		return 0;
+	}
+	// vdp_mem <vram|cram|vsram> <addr> <len>: raw VDP memory as hex. Byte
+	// addresses. vram: 64 KB in bus order. cram: 64 words (128 bytes), each the
+	// hardware 9-bit 0000BBB0GGG0RRR0, big-endian. vsram: vsram_size words
+	// (40, 80 bytes) of 11 bits, big-endian. Reply {"kind","addr","hex"}.
+	if (!strncmp(line, "vdp_mem ", 8)) {
+		if (!current_system || current_system->type != SYSTEM_GENESIS) { control_send_err("vdp_mem needs a Genesis system"); return 0; }
+		vdp_context *v = ((genesis_context *)current_system)->vdp;
+		const char *p = line + 8;
+		const char *kind;
+		uint32_t size;
+		if (!strncmp(p, "vram ", 5)) { kind = "vram"; size = VRAM_SIZE; p += 5; }
+		else if (!strncmp(p, "cram ", 5)) { kind = "cram"; size = CRAM_SIZE * 2; p += 5; }
+		else if (!strncmp(p, "vsram ", 6)) { kind = "vsram"; size = v->vsram_size * 2; p += 6; }
+		else { control_send_err("vdp_mem needs vram, cram or vsram"); return 0; }
+		uint32_t addr, len;
+		if (!parse_u32(&p, &addr) || !parse_u32(&p, &len) || *p) { control_send_err("vdp_mem needs <kind> <addr> <len>"); return 0; }
+		if (!len || addr >= size || len > size - addr) { control_send_err("vdp_mem range outside that memory"); return 0; }
+		uint8_t *buf = malloc(len);
+		if (!buf) { control_send_err("out of memory"); return 0; }
+		for (uint32_t i = 0; i < len; i++) {
+			uint32_t a = addr + i;
+			if (!strcmp(kind, "vram")) {
+				buf[i] = v->vdpmem[a];
+			} else {
+				uint16_t w = !strcmp(kind, "cram") ? v->cram[a >> 1] & CRAM_BITS : v->vsram[a >> 1] & VSRAM_BITS;
+				buf[i] = (a & 1) ? w & 0xFF : w >> 8;
+			}
+		}
+		char head[48]; snprintf(head, sizeof(head), "\"kind\":\"%s\",\"addr\":%u", kind, addr);
+		send_hex_result(head, buf, len);
+		free(buf);
+		return 0;
+	}
 	if (!strcmp(line, "reset") || !strcmp(line, "reset hard")) {
 		if (current_system && current_system->soft_reset) {
 			current_system->soft_reset(current_system);
@@ -528,7 +680,7 @@ int control_dispatch(char *line)
 // nonzero return to break this loop.
 void control_pause_loop(void *sys)
 {
-	char line[2048];
+	char line[CONTROL_LINE_MAX];
 	while (control_sock >= 0) {
 		if (!control_read_line(line, sizeof(line))) {
 			CTL_CLOSE(control_sock);
@@ -581,7 +733,7 @@ static void set_nonblocking(int s, int on)
 void control_poll(void *sys)
 {
 	set_nonblocking(control_sock, 1);
-	char line[2048];
+	char line[CONTROL_LINE_MAX];
 	for (;;) {
 		int space = (int)sizeof(rx) - rx_len;
 		if (space <= 0) { rx_len = 0; break; }  // buffer full with no newline: drop and stop polling this cycle
