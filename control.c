@@ -403,6 +403,18 @@ static void send_hex_result(const char *head, const uint8_t *data, uint32_t len)
 	free(msg);
 }
 
+// step_until: condition checked at every frame boundary while stepping.
+static int until_active = 0;
+static uint32_t until_addr;
+static uint8_t until_mask, until_value;
+
+static void send_until_result(int matched)
+{
+	char body[96];
+	snprintf(body, sizeof(body), "\"frame\":%lu,\"matched\":%s", control_frame, matched ? "true" : "false");
+	control_send_ok(body);
+}
+
 // Dispatch a single request line. Returns:
 //   0 = handled inline (reply already sent), stay paused
 //   1 = advance the emulator (step/run); reply is sent at the next boundary
@@ -664,6 +676,30 @@ int control_dispatch(char *line)
 		free(buf);
 		return 0;
 	}
+	// step_until <addr> <mask> <value> <max_steps>: step like "step" (same
+	// unit: one frame boundary, half a video frame) until
+	// (byte at addr & mask) == value at a boundary, or max_steps have run.
+	// Always advances at least one step. addr must be work RAM. Reply
+	// {"frame","matched"}.
+	if (!strncmp(line, "step_until ", 11)) {
+		if (running) { control_send_err("cannot step while running; pause first"); return 0; }
+		if (!current_system || current_system->type != SYSTEM_GENESIS) { control_send_err("step_until needs a Genesis system"); return 0; }
+		const char *p = line + 11;
+		uint32_t addr, mask, value, n;
+		if (!parse_u32(&p, &addr) || !parse_u32(&p, &mask) || !parse_u32(&p, &value) || !parse_u32(&p, &n) || *p) {
+			control_send_err("step_until needs <addr> <mask> <value> <max_steps>");
+			return 0;
+		}
+		if (!is_ram_range(addr, 1)) { control_send_err("step_until addr must be work RAM (0xE00000-0xFFFFFF)"); return 0; }
+		if (mask > 0xFF || value > 0xFF) { control_send_err("step_until mask and value are bytes (0-255)"); return 0; }
+		if (!n || n > 0x7FFFFFFF) { control_send_err("step_until needs a positive step count"); return 0; }
+		until_active = 1;
+		until_addr = addr;
+		until_mask = (uint8_t)mask;
+		until_value = (uint8_t)value;
+		step_remaining = (int)n;
+		return 1;
+	}
 	if (!strcmp(line, "reset") || !strcmp(line, "reset hard")) {
 		if (current_system && current_system->soft_reset) {
 			current_system->soft_reset(current_system);
@@ -701,9 +737,16 @@ void control_frame_boundary(void *sys, unsigned int elapsed)
 
 	if (step_remaining > 0) {
 		step_remaining -= (int)elapsed;
-		if (step_remaining <= 0) {
+		int matched = until_active
+			&& (*ram_ptr((genesis_context *)sys, until_addr) & until_mask) == until_value;
+		if (matched || step_remaining <= 0) {
 			step_remaining = 0;
-			send_frame_result();
+			if (until_active) {
+				until_active = 0;
+				send_until_result(matched);
+			} else {
+				send_frame_result();
+			}
 			control_pause_loop(sys);   // block for the next command
 		}
 		return;
