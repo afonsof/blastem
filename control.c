@@ -26,6 +26,7 @@
 #include "psg.h"
 #include "png.h"
 #include "backend.h"
+#include "serialize.h"
 
 int control_enabled = 0;
 static int control_sock = -1;
@@ -415,6 +416,42 @@ static void send_until_result(int matched)
 	control_send_ok(body);
 }
 
+// save_state/load_state request, carried out by control_instruction_boundary.
+enum { STATE_NONE, STATE_SAVE, STATE_LOAD };
+static int state_op = STATE_NONE;
+static char state_path[1024];
+
+// Runs a pending save_state/load_state with BlastEm's native serializer
+// (genesis_serialize/genesis_deserialize, the format of its .state slots) and
+// sends the reply.
+static void do_state_op(genesis_context *gen, int op)
+{
+	char body[1100];
+	if (op == STATE_SAVE) {
+		serialize_buffer state;
+		init_serialize(&state);
+		// the NEW_CORE 68000 saves its own pc; the argument is only used by the JIT core
+		genesis_serialize(gen, &state, gen->m68k->pc, 1);
+		int ok = save_to_file(&state, state_path);
+		free(state.data);
+		if (!ok) { control_send_err("save_state failed to write the file"); return; }
+	} else {
+		deserialize_buffer state;
+		if (!load_from_file(&state, state_path)) {
+			control_send_err("load_state failed: not a BlastEm native .state file");
+			return;
+		}
+		genesis_deserialize(&state, gen);
+		free(state.data);
+		// the VDP frame counter came from the file: rebase so the next
+		// boundary sees the frames run since the load, not the difference
+		gen->last_frame = gen->vdp->frame;
+		gen->last_flush_cycle = gen->m68k->cycles;
+	}
+	snprintf(body, sizeof(body), "\"path\":\"%s\",\"frame\":%lu", state_path, control_frame);
+	control_send_ok(body);
+}
+
 // Dispatch a single request line. Returns:
 //   0 = handled inline (reply already sent), stay paused
 //   1 = advance the emulator (step/run); reply is sent at the next boundary
@@ -643,6 +680,27 @@ int control_dispatch(char *line)
 		control_send_ok(body);
 		return 0;
 	}
+	// save_state <path> / load_state <path>: the whole machine to/from a file in
+	// BlastEm's native .state format (genesis_serialize/genesis_deserialize).
+	// Both run at a 68000 instruction boundary: when paused at a step's frame
+	// boundary that is the same sync point or the end of the instruction in
+	// flight, before the next frame. The reply comes from there and the
+	// emulator stays paused. Reply {"path","frame"}; frame is this server's
+	// step counter, which a load does not rewind. The live framebuffer is not
+	// in the state: step before a screenshot. Interpreter (NEW_CORE) only.
+	if (!strncmp(line, "save_state ", 11) || !strncmp(line, "load_state ", 11)) {
+		if (!current_system || current_system->type != SYSTEM_GENESIS) { control_send_err("save_state/load_state need a Genesis system"); return 0; }
+#ifndef NEW_CORE
+		control_send_err("save_state/load_state need a NEW_CORE (interpreter) build");
+		return 0;
+#endif
+		const char *path = line + 11;
+		if (!*path || strlen(path) >= sizeof(state_path)) { control_send_err("save_state/load_state need a path (max 1023 chars)"); return 0; }
+		if (state_op != STATE_NONE) { control_send_err("a save_state/load_state is already pending"); return 0; }
+		strcpy(state_path, path);
+		state_op = line[0] == 's' ? STATE_SAVE : STATE_LOAD;
+		return 1;  // leave the pause loop; control_instruction_boundary replies
+	}
 	// vdp_mem <vram|cram|vsram> <addr> <len>: raw VDP memory as hex. Byte
 	// addresses. vram: 64 KB in bus order. cram: 64 words (128 bytes), each the
 	// hardware 9-bit 0000BBB0GGG0RRR0, big-endian. vsram: vsram_size words
@@ -734,6 +792,9 @@ void control_frame_boundary(void *sys, unsigned int elapsed)
 	if (control_sock < 0) return;
 	control_frame += elapsed;
 	control_apply_pad(sys);
+	// a save_state/load_state is about to run at the next instruction
+	// boundary (same sync or the next); it replies and pauses there
+	if (state_op != STATE_NONE) return;
 
 	if (step_remaining > 0) {
 		step_remaining -= (int)elapsed;
@@ -760,6 +821,22 @@ void control_frame_boundary(void *sys, unsigned int elapsed)
 
 	// paused and not stepping: block until told to advance
 	control_pause_loop(sys);
+}
+
+// Called from sync_components when the 68000 is at an instruction boundary
+// (address known). Runs a pending save_state/load_state, replies, and stays
+// paused there (unless free-running) so a following command, including
+// another save/load, sees exactly that point.
+void control_instruction_boundary(void *sys)
+{
+	if (control_sock < 0) return;
+	while (state_op != STATE_NONE) {
+		int op = state_op;
+		do_state_op((genesis_context *)sys, op);
+		state_op = STATE_NONE;
+		if (running || step_remaining) break;
+		control_pause_loop(sys);
+	}
 }
 
 static void set_nonblocking(int s, int on)

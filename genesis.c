@@ -717,6 +717,11 @@ static m68k_context *sync_components(m68k_context * context, uint32_t address)
 		event_soft_flush(mclks);
 		gen->last_flush_cycle = mclks;
 	}
+	if (address && control_enabled) {
+		//control server save_state/load_state run here, at an instruction
+		//boundary, before the sync/interrupt timing below is derived
+		control_instruction_boundary(gen);
+	}
 	gen->frame_end = vdp_cycles_to_frame_end(v_context);
 	context->sync_cycle = gen->frame_end;
 	//printf("Set sync cycle to: %d @ %d, vcounter: %d, hslot: %d\n", context->sync_cycle, context->cycles, v_context->vcounter, v_context->hslot);
@@ -990,6 +995,11 @@ static m68k_context* sync_components_pico(m68k_context * context, uint32_t addre
 	} else if (mclks - gen->last_flush_cycle > gen->soft_flush_cycles) {
 		event_soft_flush(mclks);
 		gen->last_flush_cycle = mclks;
+	}
+	if (address && control_enabled) {
+		//control server save_state/load_state run here, at an instruction
+		//boundary, before the sync/interrupt timing below is derived
+		control_instruction_boundary(gen);
 	}
 	gen->frame_end = vdp_cycles_to_frame_end(v_context);
 	context->sync_cycle = gen->frame_end;

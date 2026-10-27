@@ -12,6 +12,9 @@ int control_dispatch(char *line);
 void control_pause_loop(void *sys);
 void control_frame_boundary(void *sys, unsigned int elapsed_frames);
 void control_poll(void *sys);
+// Called from sync_components at a 68000 instruction boundary: runs a pending
+// save_state/load_state request.
+void control_instruction_boundary(void *sys);
 // Called when the 68000 acknowledges VInt (level 6): counts it and latches the
 // sound chip state for "sound_state vint".
 void control_vint_ack(void *sys);
